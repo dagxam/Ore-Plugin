@@ -35,7 +35,6 @@
   </dependencies>
 
   <build>
-    <!-- Фильтрация plugin.yml, чтобы версия бралась из pom.xml -->
     <resources>
       <resource>
         <directory>src/main/resources</directory>
@@ -54,7 +53,6 @@
     </resources>
 
     <plugins>
-      <!-- Гарантируем сборку только на JDK 21 -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
@@ -75,3 +73,20 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.11.0</version>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+          <compilerArgs>
+            <arg>-Xlint:deprecation</arg>
+            <arg>-Xlint:unchecked</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
