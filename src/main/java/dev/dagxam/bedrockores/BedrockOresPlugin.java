@@ -22,6 +22,9 @@ public class BedrockOresPlugin extends JavaPlugin {
         // Периодическое сохранение
         Bukkit.getScheduler().runTaskTimer(this, nodeManager::save, 20L * 60L, 20L * 60L);
 
+        // Проверка респаунов: раз в 30 сек (и сразу один раз)
+        Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
+
         getLogger().info("BedrockOres enabled.");
     }
 
