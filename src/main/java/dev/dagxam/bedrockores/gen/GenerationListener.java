@@ -11,7 +11,9 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.plugin.Plugin;
 
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Random;
 
 public class GenerationListener implements Listener {
     private final Plugin plugin;
@@ -24,7 +26,6 @@ public class GenerationListener implements Listener {
         this.plugin = plugin;
         this.nodeManager = nodeManager;
 
-        // загрузим веса
         ConfigurationSection w = plugin.getConfig().getConfigurationSection("ore-weights");
         if (w != null) {
             for (String k : w.getKeys(false)) {
@@ -36,7 +37,6 @@ public class GenerationListener implements Listener {
             }
         }
         if (weights.isEmpty()) {
-            // дефолт
             weights.put(Material.DEEPSLATE_REDSTONE_ORE, 8);
             weights.put(Material.DEEPSLATE_IRON_ORE, 6);
             weights.put(Material.DEEPSLATE_GOLD_ORE, 3);
@@ -60,14 +60,13 @@ public class GenerationListener implements Listener {
 
         generateInChunk(chunk);
         nodeManager.markChunkProcessed(world, cx, cz);
-        // сохраним флаг
         nodeManager.save();
     }
 
     private void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
         int minY = world.getMinHeight();
-        int maxY = minY + 3; // первые 4 уровня над бедроком
+        int maxY = minY + 3; // 4 слоя над бедроком
 
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
         int radius = plugin.getConfig().getInt("generation.bedrock-radius", 1);
@@ -81,16 +80,13 @@ public class GenerationListener implements Listener {
                     int z = (chunk.getZ() << 4) + lz;
                     Location loc = new Location(world, x, y, z);
 
-                    // Блок должен быть камень/глубин.сланец/туф, не воздух/вода
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
-
                     if (!isNearBedrock(loc, radius)) continue;
 
                     Material ore = rollOre();
                     if (ore == null) continue;
 
-                    // Создаем узел
                     int hits = nodeManager.randomHits();
                     nodeManager.addNode(loc, ore, hits);
                 }
@@ -100,7 +96,6 @@ public class GenerationListener implements Listener {
 
     private boolean isReplaceable(Material m) {
         if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
-        // иногда внизу попадаются базальт/андезит и т.п.
         if (m.name().endsWith("_STONE") || m.name().endsWith("ANDESITE") || m.name().endsWith("DIORITE") || m.name().endsWith("GRANITE")) {
             return true;
         }
@@ -113,9 +108,7 @@ public class GenerationListener implements Listener {
             for (int dy = -radius; dy <= radius; dy++) {
                 for (int dz = -radius; dz <= radius; dz++) {
                     Material m = w.getBlockAt(loc.getBlockX() + dx, loc.getBlockY() + dy, loc.getBlockZ() + dz).getType();
-                    if (m == Material.BEDROCK) {
-                        return true;
-                    }
+                    if (m == Material.BEDROCK) return true;
                 }
             }
         }
