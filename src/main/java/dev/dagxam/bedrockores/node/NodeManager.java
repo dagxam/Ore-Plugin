@@ -15,8 +15,12 @@ import java.util.*;
 public class NodeManager {
     private final Plugin plugin;
 
+    // Активные узлы
     private final Map<String, NodeData> nodes = new HashMap<>();
+    // Обработанные чанки (для одноразовой генерации)
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
+    // Очередь респаунов
+    private final Map<String, RespawnData> respawns = new HashMap<>();
 
     private final File dataFile;
 
@@ -58,6 +62,72 @@ public class NodeManager {
 
     public boolean isChunkProcessed(World world, int cx, int cz) {
         return processedChunks.getOrDefault(world.getUID(), Collections.emptySet()).contains(chunkKey(cx, cz));
+    }
+
+    // Планирование респауна через delay-seconds (по умолчанию 3600)
+    public void scheduleRespawn(Location loc, Material oreType) {
+        if (!plugin.getConfig().getBoolean("respawn.enabled", true)) return;
+        long delaySec = plugin.getConfig().getLong("respawn.delay-seconds", 3600L);
+        long due = System.currentTimeMillis() + delaySec * 1000L;
+        respawns.put(key(loc), new RespawnData(oreType, due));
+        save(); // чтобы пережило рестарт
+    }
+
+    // Проверяем, кому пора возродиться
+    public void tickRespawns() {
+        if (respawns.isEmpty()) return;
+        long now = System.currentTimeMillis();
+
+        List<String> ready = new ArrayList<>();
+        for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
+            if (e.getValue().dueAtMillis <= now) {
+                ready.add(e.getKey());
+            }
+        }
+        if (ready.isEmpty()) return;
+
+        for (String k : ready) {
+            Location loc = locationFromKey(k);
+            RespawnData rd = respawns.get(k);
+            if (loc == null || rd == null) {
+                respawns.remove(k);
+                continue;
+            }
+            World w = loc.getWorld();
+            if (w == null) {
+                respawns.remove(k);
+                continue;
+            }
+            // Убедимся, что чанк загружен
+            if (!loc.getChunk().isLoaded()) {
+                boolean loaded = loc.getChunk().load(); // синхронно
+                if (!loaded) continue; // попробуем позже
+            }
+
+            // Восстановим узел той же руды с новыми "ударами"
+            int hits = randomHits();
+            addNode(loc, rd.oreMaterial, hits);
+
+            // Снимаем из очереди
+            respawns.remove(k);
+        }
+        save();
+    }
+
+    private Location locationFromKey(String k) {
+        try {
+            String[] parts = k.split(":");
+            if (parts.length != 4) return null;
+            UUID world = UUID.fromString(parts[0]);
+            int x = Integer.parseInt(parts[1]);
+            int y = Integer.parseInt(parts[2]);
+            int z = Integer.parseInt(parts[3]);
+            World w = Bukkit.getWorld(world);
+            if (w == null) return null;
+            return new Location(w, x, y, z);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public void load() {
@@ -111,7 +181,30 @@ public class NodeManager {
             }
         }
 
-        plugin.getLogger().info("Loaded " + nodes.size() + " nodes; processedChunks worlds: " + processedChunks.size());
+        ConfigurationSection respSec = yml.getConfigurationSection("respawns");
+        if (respSec != null) {
+            for (String id : respSec.getKeys(false)) {
+                ConfigurationSection s = respSec.getConfigurationSection(id);
+                try {
+                    UUID worldId = UUID.fromString(Objects.requireNonNull(s.getString("world")));
+                    int x = s.getInt("x");
+                    int y = s.getInt("y");
+                    int z = s.getInt("z");
+                    Material mat = Material.valueOf(s.getString("type"));
+                    long due = s.getLong("dueAt");
+
+                    World w = Bukkit.getWorld(worldId);
+                    if (w == null) continue;
+                    Location loc = new Location(w, x, y, z);
+
+                    respawns.put(key(loc), new RespawnData(mat, due));
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Bad respawn entry: " + id + " -> " + e.getMessage());
+                }
+            }
+        }
+
+        plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processedChunks worlds=" + processedChunks.size());
     }
 
     public void save() {
@@ -144,6 +237,25 @@ public class NodeManager {
                 list.add(cx + ":" + cz);
             }
             yml.set("processedChunks." + e.getKey().toString(), list);
+        }
+
+        int r = 0;
+        for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
+            String id = "r" + (r++);
+            String[] parts = e.getKey().split(":");
+            UUID world = UUID.fromString(parts[0]);
+            int x = Integer.parseInt(parts[1]);
+            int y = Integer.parseInt(parts[2]);
+            int z = Integer.parseInt(parts[3]);
+
+            RespawnData rd = e.getValue();
+            String path = "respawns." + id;
+            yml.set(path + ".world", world.toString());
+            yml.set(path + ".x", x);
+            yml.set(path + ".y", y);
+            yml.set(path + ".z", z);
+            yml.set(path + ".type", rd.oreMaterial.name());
+            yml.set(path + ".dueAt", rd.dueAtMillis);
         }
 
         try {
