@@ -8,7 +8,7 @@ import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
-import org.bukkit.event.world.Chun kLoadEvent;
+import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.plugin.Plugin;
 
 import java.util.LinkedHashMap;
@@ -66,7 +66,7 @@ public class GenerationListener implements Listener {
     private void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
         int minY = world.getMinHeight();
-        int maxY = minY + 3; // нижние 4 слоя над границей мира
+        int maxY = minY + 3; // нижние 4 слоя
 
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
 
@@ -82,8 +82,11 @@ public class GenerationListener implements Listener {
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
 
-                    if (!touchesBedrock(loc)) continue;       // строго вплотную к бедроку
-                    if (adjacentToNode(loc)) continue;        // одиночные блоки — без "жил" рядом
+                    // строго касаемся бедрока по 6 граням
+                    if (!touchesBedrock(loc)) continue;
+
+                    // одиночный блок — не ставим рядом с другим узлом
+                    if (adjacentToNode(loc)) continue;
 
                     Material ore = rollOre();
                     if (ore == null) continue;
@@ -121,12 +124,12 @@ public class GenerationListener implements Listener {
         int x = loc.getBlockX();
         int y = loc.getBlockY();
         int z = loc.getBlockZ();
-        return nmAt(x + 1, y, z, w) || nmAt(x - 1, y, z, w) ||
-               nmAt(x, y + 1, z, w) || nmAt(x, y - 1, z, w) ||
-               nmAt(x, y, z + 1, w) || nmAt(x, y, z - 1, w);
+        return isNodeAt(w, x + 1, y, z) || isNodeAt(w, x - 1, y, z)
+            || isNodeAt(w, x, y + 1, z) || isNodeAt(w, x, y - 1, z)
+            || isNodeAt(w, x, y, z + 1) || isNodeAt(w, x, y, z - 1);
     }
 
-    private boolean nmAt(int x, int y, int z, World w) {
+    private boolean isNodeAt(World w, int x, int y, int z) {
         return nodeManager.isNode(new Location(w, x, y, z));
     }
 
