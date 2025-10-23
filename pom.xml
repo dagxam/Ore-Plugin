@@ -1,7 +1,7 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" 
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
-                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>dev.dagxam</groupId>
@@ -32,11 +32,17 @@
       <version>${paper.api.version}</version>
       <scope>provided</scope>
     </dependency>
+    <!-- Пример внешней зависимости, если нужна:
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>some-lib</artifactId>
+      <version>1.2.3</version>
+    </dependency>
+    -->
   </dependencies>
 
   <build>
     <plugins>
-      <!-- Требуем JDK 21 -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
@@ -70,8 +76,6 @@
         </configuration>
       </plugin>
 
-      <!-- Если нужны сторонние либы, добавьте maven-shade-plugin; здесь не обязателен -->
-      <!--
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
@@ -79,17 +83,17 @@
         <executions>
           <execution>
             <phase>package</phase>
-            <goals><goal>shade</goal></goals>
+            <goals>
+              <goal>shade</goal>
+            </goals>
             <configuration>
-              <relocations>
-                <!-- Relocate пакеты, если добавляете свои зависимости -->
-              </relocations>
+              <!-- Если не требуется релокация, просто оставь пустой блок -->
+              <relocations/>
               <minimizeJar>true</minimizeJar>
             </configuration>
           </execution>
         </executions>
       </plugin>
-      -->
     </plugins>
   </build>
 </project>
