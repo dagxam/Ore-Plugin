@@ -16,12 +16,11 @@ public class BedrockOresPlugin extends JavaPlugin {
         this.nodeManager = new NodeManager(this);
         nodeManager.load();
 
-        // Листенеры
         Bukkit.getPluginManager().registerEvents(new GenerationListener(this, nodeManager), this);
         Bukkit.getPluginManager().registerEvents(new OreListeners(this, nodeManager), this);
 
         // Периодическое сохранение
-        Bukkit.getScheduler().runTaskTimer(this, nodeManager::save, 20L * 60L, 20L * 60L); // каждую минуту
+        Bukkit.getScheduler().runTaskTimer(this, nodeManager::save, 20L * 60L, 20L * 60L);
 
         getLogger().info("BedrockOres enabled.");
     }
