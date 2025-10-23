@@ -8,7 +8,7 @@ import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
-import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.event.world.Chun kLoadEvent;
 import org.bukkit.plugin.Plugin;
 
 import java.util.LinkedHashMap;
@@ -66,7 +66,7 @@ public class GenerationListener implements Listener {
     private void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
         int minY = world.getMinHeight();
-        int maxY = minY + 3; // только самый низ: 4 слоя над нижней границей мира
+        int maxY = minY + 3; // нижние 4 слоя над границей мира
 
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
 
@@ -82,8 +82,8 @@ public class GenerationListener implements Listener {
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
 
-                    // Строго вплотную к бедроку (по 6 сторонам)
-                    if (!touchesBedrock(loc)) continue;
+                    if (!touchesBedrock(loc)) continue;       // строго вплотную к бедроку
+                    if (adjacentToNode(loc)) continue;        // одиночные блоки — без "жил" рядом
 
                     Material ore = rollOre();
                     if (ore == null) continue;
@@ -108,13 +108,26 @@ public class GenerationListener implements Listener {
         int x = loc.getBlockX();
         int y = loc.getBlockY();
         int z = loc.getBlockZ();
-        // Проверяем 6 граней
         return w.getBlockAt(x + 1, y, z).getType() == Material.BEDROCK
             || w.getBlockAt(x - 1, y, z).getType() == Material.BEDROCK
             || w.getBlockAt(x, y + 1, z).getType() == Material.BEDROCK
             || w.getBlockAt(x, y - 1, z).getType() == Material.BEDROCK
             || w.getBlockAt(x, y, z + 1).getType() == Material.BEDROCK
             || w.getBlockAt(x, y, z - 1).getType() == Material.BEDROCK;
+    }
+
+    private boolean adjacentToNode(Location loc) {
+        World w = loc.getWorld();
+        int x = loc.getBlockX();
+        int y = loc.getBlockY();
+        int z = loc.getBlockZ();
+        return nmAt(x + 1, y, z, w) || nmAt(x - 1, y, z, w) ||
+               nmAt(x, y + 1, z, w) || nmAt(x, y - 1, z, w) ||
+               nmAt(x, y, z + 1, w) || nmAt(x, y, z - 1, w);
+    }
+
+    private boolean nmAt(int x, int y, int z, World w) {
+        return nodeManager.isNode(new Location(w, x, y, z));
     }
 
     private Material rollOre() {
