@@ -1,5 +1,5 @@
 name: BedrockOres
-main: dev.example.bedrockores.BedrockOresPlugin
+main: dev.dagxam.bedrockores.BedrockOresPlugin
 version: 1.0.0
 api-version: '1.21'
 load: POSTWORLD
