@@ -1,8 +1,8 @@
 package dev.dagxam.bedrockores;
 
-import dev.example.bedrockores.gen.GenerationListener;
-import dev.example.bedrockores.node.NodeManager;
-import dev.example.bedrockores.node.OreListeners;
+import dev.dagxam.bedrockores.gen.GenerationListener;
+import dev.dagxam.bedrockores.node.NodeManager;
+import dev.dagxam.bedrockores.node.OreListeners;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
