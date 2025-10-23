@@ -71,21 +71,29 @@ public class GenerationListener implements Listener {
         nodeManager.processDueRespawnsInChunk(chunk);
     }
 
-    // Публично — вызывается и командой
+    // Публично — для команды
     public void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
         int minY = world.getMinHeight();
         int layers = Math.max(1, plugin.getConfig().getInt("generation.layers-from-bottom", 7));
         int maxY = minY + (layers - 1);
 
-        int spacing = Math.max(1, plugin.getConfig().getInt("generation.min-spacing", 4));
-        int spacing2 = spacing * spacing;
+        int minSpacing = Math.max(1, plugin.getConfig().getInt("generation.min-spacing", 4));
+        int spacing2 = minSpacing * minSpacing;
 
-        double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
+        double baseChance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
+        double densityMul = Math.max(0.0D, plugin.getConfig().getDouble("generation.density-multiplier", 1.0D));
+        double chance = baseChance * densityMul;
 
-        // локальные принятые позиции в этом прогоне (чтобы не ставить узлы близко внутри одного чанка)
+        int targetPerChunk = Math.max(0, plugin.getConfig().getInt("generation.target-per-chunk", 12));
+        int maxPerChunk = Math.max(targetPerChunk, plugin.getConfig().getInt("generation.max-per-chunk", 24));
+        int fillAttemptsPerNode = Math.max(5, plugin.getConfig().getInt("generation.fill-attempts-per-node", 25));
+
+        int placed = 0;
         List<int[]> placedLocal = new ArrayList<>();
 
+        // 1) Базовый проход по блокам (вероятностный)
+        outer:
         for (int lx = 0; lx < 16; lx++) {
             for (int lz = 0; lz < 16; lz++) {
                 for (int y = minY; y <= maxY; y++) {
@@ -98,13 +106,9 @@ public class GenerationListener implements Listener {
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
 
-                    // строго вплотную к бедроку
                     if (!touchesBedrock(loc)) continue;
 
-                    // дистанция до уже существующих узлов (в соседних чанках)
-                    if (!farEnoughFromExistingNodes(loc, spacing, spacing2)) continue;
-
-                    // дистанция до узлов, поставленных в этом же чанке прямо сейчас
+                    if (!farEnoughFromExistingNodes(loc, minSpacing, spacing2)) continue;
                     if (!farEnoughFromLocal(placedLocal, x, y, z, spacing2)) continue;
 
                     Material ore = rollOre();
@@ -113,7 +117,39 @@ public class GenerationListener implements Listener {
                     int hits = nodeManager.randomHits();
                     nodeManager.addNode(loc, ore, hits);
                     placedLocal.add(new int[]{x, y, z});
+                    placed++;
+
+                    if (placed >= maxPerChunk) break outer;
                 }
+            }
+        }
+
+        // 2) Добор до целевого числа узлов (случайные попытки)
+        if (placed < targetPerChunk) {
+            int need = targetPerChunk - placed;
+            int attempts = Math.max(need * fillAttemptsPerNode, need); // страховка
+
+            while (placed < targetPerChunk && attempts-- > 0) {
+                int rx = (chunk.getX() << 4) + random.nextInt(16);
+                int rz = (chunk.getZ() << 4) + random.nextInt(16);
+                int ry = minY + random.nextInt(Math.max(1, (maxY - minY + 1)));
+
+                Location loc = new Location(world, rx, ry, rz);
+                Material current = loc.getBlock().getType();
+                if (!isReplaceable(current)) continue;
+                if (!touchesBedrock(loc)) continue;
+                if (!farEnoughFromExistingNodes(loc, minSpacing, spacing2)) continue;
+                if (!farEnoughFromLocal(placedLocal, rx, ry, rz, spacing2)) continue;
+
+                Material ore = rollOre();
+                if (ore == null) continue;
+
+                int hits = nodeManager.randomHits();
+                nodeManager.addNode(loc, ore, hits);
+                placedLocal.add(new int[]{rx, ry, rz});
+                placed++;
+
+                if (placed >= maxPerChunk) break;
             }
         }
     }
@@ -149,8 +185,7 @@ public class GenerationListener implements Listener {
                 for (int dz = -spacing; dz <= spacing; dz++) {
                     int d2 = dx*dx + dy*dy + dz*dz;
                     if (d2 > spacing2) continue;
-                    Location check = new Location(w, x + dx, y + dy, z + dz);
-                    if (nodeManager.isNode(check)) return false;
+                    if (nodeManager.isNode(new Location(w, x + dx, y + dy, z + dz))) return false;
                 }
             }
         }
