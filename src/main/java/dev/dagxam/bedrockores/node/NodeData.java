@@ -3,7 +3,7 @@ package dev.dagxam.bedrockores.node;
 import org.bukkit.Material;
 
 public class NodeData {
-    public final Material oreMaterial; // тип руды (DEEPSLATE_*_ORE)
+    public final Material oreMaterial;
     public int hitsRemaining;
     public final int maxHits;
 
