@@ -8,7 +8,7 @@
   <artifactId>bedrock-ores</artifactId>
   <version>1.0.0</version>
   <name>BedrockOres</name>
-  <description>Bedrock-adjacent ores: unbreakable, drop on hit, turn into bedrock.</description>
+  <description>Bedrock-adjacent ores plugin for Paper 1.21+</description>
   <packaging>jar</packaging>
 
   <properties>
@@ -32,17 +32,29 @@
       <version>${paper.api.version}</version>
       <scope>provided</scope>
     </dependency>
-    <!-- Пример внешней зависимости, если нужна:
-    <dependency>
-      <groupId>com.example</groupId>
-      <artifactId>some-lib</artifactId>
-      <version>1.2.3</version>
-    </dependency>
-    -->
   </dependencies>
 
   <build>
+    <!-- Фильтрация plugin.yml, чтобы версия бралась из pom.xml -->
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+        <includes>
+          <include>plugin.yml</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>false</filtering>
+        <excludes>
+          <exclude>plugin.yml</exclude>
+        </excludes>
+      </resource>
+    </resources>
+
     <plugins>
+      <!-- Гарантируем сборку только на JDK 21 -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
@@ -50,7 +62,9 @@
         <executions>
           <execution>
             <id>enforce-java</id>
-            <goals><goal>enforce</goal></goals>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
             <configuration>
               <rules>
                 <requireJavaVersion>
@@ -61,39 +75,3 @@
             </configuration>
           </execution>
         </executions>
-      </plugin>
-
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.11.0</version>
-        <configuration>
-          <release>${maven.compiler.release}</release>
-          <compilerArgs>
-            <arg>-Xlint:deprecation</arg>
-            <arg>-Xlint:unchecked</arg>
-          </compilerArgs>
-        </configuration>
-      </plugin>
-
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-shade-plugin</artifactId>
-        <version>3.5.1</version>
-        <executions>
-          <execution>
-            <phase>package</phase>
-            <goals>
-              <goal>shade</goal>
-            </goals>
-            <configuration>
-              <!-- Если не требуется релокация, просто оставь пустой блок -->
-              <relocations/>
-              <minimizeJar>true</minimizeJar>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-    </plugins>
-  </build>
-</project>
