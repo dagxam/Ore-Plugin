@@ -60,11 +60,14 @@ public class GenerationListener implements Listener {
         Chunk chunk = e.getChunk();
         int cx = chunk.getX();
         int cz = chunk.getZ();
-        if (nodeManager.isChunkProcessed(world, cx, cz)) return;
+        if (!nodeManager.isChunkProcessed(world, cx, cz)) {
+            generateInChunk(chunk);
+            nodeManager.markChunkProcessed(world, cx, cz);
+        }
 
-        generateInChunk(chunk);
-        nodeManager.markChunkProcessed(world, cx, cz);
-        nodeManager.save();
+        // Восстанавливаем «просроченные» руды в этом чанке (если их время уже пришло)
+        nodeManager.processDueRespawnsInChunk(chunk);
+        // Сохранять на каждом ChunkLoad не обязательно; у нас есть периодический save()
     }
 
     // Публично — вызывается и командой
