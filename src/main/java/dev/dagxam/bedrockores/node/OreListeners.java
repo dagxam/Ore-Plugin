@@ -10,8 +10,10 @@ import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.ExperienceOrb;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockDamageEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.block.BlockPistonRetractEvent;
@@ -32,35 +34,62 @@ public class OreListeners implements Listener {
         this.nm = nm;
     }
 
-    @EventHandler(ignoreCancelled = true)
+    // Основной "удар" — по клику (BlockDamage), чтобы блок не успевал ломаться
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onBlockDamage(BlockDamageEvent e) {
+        Block block = e.getBlock();
+        if (!nm.isNode(block.getLocation())) return;
+
+        // Полностью блокируем стандартное повреждение блока
+        e.setCancelled(true);
+        e.setInstaBreak(false);
+
+        NodeData nd = nm.getNode(block.getLocation());
+        if (nd != null) {
+            handleHit(e.getPlayer(), block, nd);
+        }
+    }
+
+    // Резерв: если всё-таки дошло до попытки сломать блок — считаем как "удар", но запрещаем ломание
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onBlockBreak(BlockBreakEvent e) {
         Block block = e.getBlock();
-        Location loc = block.getLocation();
-
-        if (!nm.isNode(loc)) return;
+        if (!nm.isNode(block.getLocation())) return;
 
         e.setCancelled(true);
+        NodeData nd = nm.getNode(block.getLocation());
+        if (nd != null) {
+            handleHit(e.getPlayer(), block, nd);
+        }
+    }
 
-        NodeData nd = nm.getNode(loc);
-        Player p = e.getPlayer();
-
+    private void handleHit(Player p, Block block, NodeData nd) {
+        // Дроп за удар
         giveOreDrop(p, block, nd);
 
-        block.getWorld().playSound(loc.add(0.5, 0.5, 0.5), Sound.BLOCK_STONE_HIT, 0.8f, 1.0f);
-        showProgress(p, loc, nd);
+        // Звук и прогресс (после выдачи дропа уменьшим оставшиеся "удары")
+        block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_STONE_HIT, 0.8f, 1.0f);
 
+        // Считаем удар
         nd.hitsRemaining--;
+
         if (nd.hitsRemaining <= 0) {
+            // Финал — превращаемся в бедрок
             block.setType(Material.BEDROCK, false);
             block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_ANVIL_PLACE, 0.7f, 0.8f);
-            nm.removeNode(loc);
+            nm.removeNode(block.getLocation());
+            // Обновим action bar, что всё — 0/...
+            p.sendActionBar(Component.text("Осталось ударов: 0/" + nd.maxHits));
         } else {
+            // Частицы блока и прогресс трещин
             block.getWorld().spawnParticle(
                     Particle.BLOCK,
                     block.getLocation().add(0.5, 0.5, 0.5),
                     12, 0.3, 0.3, 0.3, 0.0,
                     block.getBlockData()
             );
+
+            showProgress(p, block.getLocation(), nd);
         }
     }
 
@@ -129,6 +158,7 @@ public class OreListeners implements Listener {
         }
     }
 
+    // Защита от взрывов
     @EventHandler
     public void onEntityExplode(EntityExplodeEvent e) {
         Iterator<Block> it = e.blockList().iterator();
@@ -147,7 +177,8 @@ public class OreListeners implements Listener {
         }
     }
 
-    @EventHandler(ignoreCancelled = true)
+    // Защита от поршней
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPistonExtend(BlockPistonExtendEvent e) {
         for (Block b : e.getBlocks()) {
             if (nm.isNode(b.getLocation())) {
@@ -157,7 +188,7 @@ public class OreListeners implements Listener {
         }
     }
 
-    @EventHandler(ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPistonRetract(BlockPistonRetractEvent e) {
         for (Block b : e.getBlocks()) {
             if (nm.isNode(b.getLocation())) {
