@@ -6,6 +6,7 @@ generation:
   bedrock-radius: 1
   min-hits: 15
   max-hits: 25
+  layers-from-bottom: 7   # НОВОЕ: сколько слоёв от минимума мира
 
 fortune-enabled: true
 
