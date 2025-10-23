@@ -1,1 +1,20 @@
+enabled-worlds:
+  - world
 
+generation:
+  chance-per-block: 0.008
+  bedrock-radius: 1
+  min-hits: 15
+  max-hits: 25
+
+fortune-enabled: true
+
+ore-weights:
+  DEEPSLATE_REDSTONE_ORE: 8
+  DEEPSLATE_IRON_ORE: 6
+  DEEPSLATE_GOLD_ORE: 3
+  DEEPSLATE_COPPER_ORE: 4
+  DEEPSLATE_COAL_ORE: 4
+  DEEPSLATE_LAPIS_ORE: 3
+  DEEPSLATE_DIAMOND_ORE: 1
+  DEEPSLATE_EMERALD_ORE: 1
