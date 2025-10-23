@@ -13,7 +13,14 @@ import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
 
 public class GenerationListener implements Listener {
     private final Plugin plugin;
@@ -74,7 +81,6 @@ public class GenerationListener implements Listener {
                 if (!t.isValid()) { it.remove(); continue; }
                 boolean done = t.step(posPerTick, fillPerTick);
                 if (done) {
-                    // чанк помечаем обработанным, когда обе фазы завершены
                     nodeManager.markChunkProcessed(t.getWorld(), t.getCx(), t.getCz());
                     it.remove();
                 }
@@ -96,18 +102,18 @@ public class GenerationListener implements Listener {
             return;
         }
 
-        // Вместо синхронной генерации — ставим задачу в очередь
+        // Ставим задачу генерации в очередь
         queueChunk(chunk);
 
-        // Возвращаем просроченные респавны в этом чанке (лёгкая операция)
+        // Восстановим просроченные респавны (лёгкая операция)
         nodeManager.processDueRespawnsInChunk(chunk);
     }
 
-    // Публично: используется командами вместо прямого generateInChunk
+    // Публично: используется командами
     public void queueChunk(Chunk chunk) {
         boolean enabled = plugin.getConfig().getBoolean("generation.queue.enabled", true);
         if (!enabled) {
-            // Фолбэк на синхронный режим (не рекомендуется на живом сервере)
+            // фолбэк на синхронный режим (не рекомендуется на живом сервере)
             generateInChunk(chunk);
             nodeManager.markChunkProcessed(chunk.getWorld(), chunk.getX(), chunk.getZ());
             return;
@@ -115,7 +121,7 @@ public class GenerationListener implements Listener {
         queue.add(new GenTask(plugin, nodeManager, random, weights, chunk));
     }
 
-    // Синхронная генерация (только для совместимости/тестов)
+    // Синхронная генерация — только для тестов/совместимости
     public void generateInChunk(Chunk chunk) {
         new GenTask(plugin, nodeManager, random, weights, chunk).runSyncAll();
     }
@@ -127,7 +133,6 @@ public class GenerationListener implements Listener {
         private final Random random;
         private final Map<Material, Integer> weights;
 
-        private final UUID worldId;
         private final World world;
         private final int cx, cz;
         private final int minY, maxY;
@@ -150,7 +155,6 @@ public class GenerationListener implements Listener {
             this.weights = weights;
 
             this.world = chunk.getWorld();
-            this.worldId = world.getUID();
             this.cx = chunk.getX();
             this.cz = chunk.getZ();
 
@@ -173,7 +177,6 @@ public class GenerationListener implements Listener {
         }
 
         public World getWorld() { return world; }
-        public UUID getWorldId() { return worldId; }
         public int getCx() { return cx; }
         public int getCz() { return cz; }
         public boolean isValid() { return world != null; }
@@ -253,4 +256,56 @@ public class GenerationListener implements Listener {
             while (!step(4096, 4096)) { /* синхронно добиваем (только для тестов!) */ }
         }
 
-        private boolean isReplaceable(Material 
+        private boolean isReplaceable(Material m) {
+            if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
+            String n = m.name();
+            return n.endsWith("_STONE") || n.endsWith("ANDESITE") || n.endsWith("DIORITE") || n.endsWith("GRANITE");
+        }
+
+        private boolean touchesBedrock(Location loc) {
+            World w = loc.getWorld();
+            int x = loc.getBlockX(), y = loc.getBlockY(), z = loc.getBlockZ();
+            return w.getBlockAt(x + 1, y, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x - 1, y, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y + 1, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y - 1, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y, z + 1).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y, z - 1).getType() == Material.BEDROCK;
+        }
+
+        // Дешевая проверка: только X/Z (горизонтальная дистанция), без прохода по Y
+        private boolean farEnoughFromExistingNodes2D(Location loc, int spacing, int spacing2) {
+            World w = loc.getWorld();
+            int x = loc.getBlockX(), z = loc.getBlockZ(), y = loc.getBlockY();
+            for (int dx = -spacing; dx <= spacing; dx++) {
+                for (int dz = -spacing; dz <= spacing; dz++) {
+                    int d2 = dx*dx + dz*dz;
+                    if (d2 > spacing2) continue;
+                    if (nodeManager.isNode(new Location(w, x + dx, y, z + dz))) return false;
+                }
+            }
+            return true;
+        }
+
+        private boolean farEnoughFromLocal2D(List<int[]> local, int x, int z, int spacing2) {
+            for (int[] p : local) {
+                int dx = p[0] - x;
+                int dz = p[2] - z;
+                if (dx*dx + dz*dz <= spacing2) return false;
+            }
+            return true;
+        }
+
+        private Material rollOre() {
+            int total = 0;
+            for (int v : weights.values()) total += v;
+            if (total <= 0) return null;
+            int r = random.nextInt(total), acc = 0;
+            for (Map.Entry<Material, Integer> e : weights.entrySet()) {
+                acc += e.getValue();
+                if (r < acc) return e.getKey();
+            }
+            return null;
+        }
+    }
+}
