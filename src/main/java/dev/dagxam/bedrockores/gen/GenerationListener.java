@@ -25,7 +25,11 @@ public class GenerationListener implements Listener {
     public GenerationListener(Plugin plugin, NodeManager nodeManager) {
         this.plugin = plugin;
         this.nodeManager = nodeManager;
+        reloadWeights();
+    }
 
+    public void reloadWeights() {
+        weights.clear();
         ConfigurationSection w = plugin.getConfig().getConfigurationSection("ore-weights");
         if (w != null) {
             for (String k : w.getKeys(false)) {
@@ -63,11 +67,12 @@ public class GenerationListener implements Listener {
         nodeManager.save();
     }
 
-    private void generateInChunk(Chunk chunk) {
+    // Публично — вызывается и командой
+    public void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
         int minY = world.getMinHeight();
         int layers = Math.max(1, plugin.getConfig().getInt("generation.layers-from-bottom", 7));
-        int maxY = minY + (layers - 1); // 7 слоев: minY..minY+6
+        int maxY = minY + (layers - 1);
 
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
 
@@ -83,10 +88,7 @@ public class GenerationListener implements Listener {
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
 
-                    // Строго вплотную к бедроку
                     if (!touchesBedrock(loc)) continue;
-
-                    // Одиночные узлы — не ставим рядом с другим узлом
                     if (adjacentToNode(loc)) continue;
 
                     Material ore = rollOre();
