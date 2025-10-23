@@ -110,41 +110,44 @@ public class OreListeners implements Listener {
 
     // Периодически наносим "удары" всем, кто удерживает ЛКМ на узле
     private void tickHolds() {
-        if (holds.isEmpty()) return;
+    if (holds.isEmpty()) return;
 
-        long now = System.nanoTime();
-        long timeoutMs = plugin.getConfig().getLong("performance.hold-timeout-ms", 350L);
-        long timeoutNs = timeoutMs * 1_000_000L;
+    long now = System.nanoTime();
+    long timeoutMs = plugin.getConfig().getLong("performance.hold-timeout-ms", 400L);
+    long timeoutNs = timeoutMs * 1_000_000L;
+    int budget = Math.max(1, plugin.getConfig().getInt("performance.max-hold-hits-per-tick", 60));
+    int processed = 0;
 
-        Iterator<Map.Entry<UUID, HoldSession>> it = holds.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<UUID, HoldSession> e = it.next();
-            UUID uuid = e.getKey();
-            HoldSession hs = e.getValue();
+    Iterator<Map.Entry<UUID, HoldSession>> it = holds.entrySet().iterator();
+    while (it.hasNext()) {
+        if (processed >= budget) break; // бюджет исчерпан — остальное на следующий тик
 
-            Player p = Bukkit.getPlayer(uuid);
-            if (p == null || !p.isOnline()) { it.remove(); continue; }
+        Map.Entry<UUID, HoldSession> e = it.next();
+        UUID uuid = e.getKey();
+        HoldSession hs = e.getValue();
 
-            if (now - hs.lastSeenNs > timeoutNs) {
-                // Считаем, что игрок отпустил кнопку/сбил наведённый блок
-                it.remove();
-                continue;
-            }
+        Player p = Bukkit.getPlayer(uuid);
+        if (p == null || !p.isOnline()) { it.remove(); continue; }
 
-            // Узел ещё существует?
-            if (!nm.isNode(hs.loc)) { it.remove(); continue; }
-
-            Block block = hs.loc.getBlock();
-
-            // Наносим "удар" и выдаём лут
-            NodeData nd = nm.getNode(hs.loc);
-            if (nd == null) { it.remove(); continue; }
-
-            handleHit(p, block, nd);
-
-            // Если узел иссяк — сессия завершается в handleHit (узел удаляется), мы снимем её тут на следующем тике
+        if (now - hs.lastSeenNs > timeoutNs) {
+            it.remove(); // игрок перестал держать ЛКМ / ушёл с блока
+            continue;
         }
+
+        // Узел ещё существует и чанк загружен?
+        if (!nm.isNode(hs.loc) || !hs.loc.getChunk().isLoaded()) {
+            it.remove();
+            continue;
+        }
+
+        Block block = hs.loc.getBlock();
+        NodeData nd = nm.getNode(hs.loc);
+        if (nd == null) { it.remove(); continue; }
+
+        handleHit(p, block, nd);
+        processed++;
     }
+}
 
     private void startOrUpdateHold(Player p, Location loc) {
         holds.put(p.getUniqueId(), new HoldSession(loc, System.nanoTime()));
