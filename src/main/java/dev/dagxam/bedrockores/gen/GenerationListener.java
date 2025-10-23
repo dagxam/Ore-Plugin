@@ -1,6 +1,7 @@
 package dev.dagxam.bedrockores.gen;
 
 import dev.dagxam.bedrockores.node.NodeManager;
+import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -10,12 +11,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 
 public class GenerationListener implements Listener {
     private final Plugin plugin;
@@ -24,10 +22,15 @@ public class GenerationListener implements Listener {
 
     private final Map<Material, Integer> weights = new LinkedHashMap<>();
 
+    // Очередь «ленивой» генерации
+    private final Deque<GenTask> queue = new ArrayDeque<>();
+    private BukkitTask queueTask;
+
     public GenerationListener(Plugin plugin, NodeManager nodeManager) {
         this.plugin = plugin;
         this.nodeManager = nodeManager;
         reloadWeights();
+        startQueue();
     }
 
     public void reloadWeights() {
@@ -54,6 +57,32 @@ public class GenerationListener implements Listener {
         }
     }
 
+    private void startQueue() {
+        boolean enabled = plugin.getConfig().getBoolean("generation.queue.enabled", true);
+        if (!enabled) return;
+        if (queueTask != null) queueTask.cancel();
+        queueTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            if (queue.isEmpty()) return;
+            int chunksPerTick = Math.max(1, plugin.getConfig().getInt("generation.queue.chunks-per-tick", 2));
+            int posPerTick = Math.max(50, plugin.getConfig().getInt("generation.queue.positions-per-tick", 280));
+            int fillPerTick = Math.max(25, plugin.getConfig().getInt("generation.queue.fill-attempts-per-tick", 150));
+
+            int processed = 0;
+            Iterator<GenTask> it = queue.iterator();
+            while (it.hasNext() && processed < chunksPerTick) {
+                GenTask t = it.next();
+                if (!t.isValid()) { it.remove(); continue; }
+                boolean done = t.step(posPerTick, fillPerTick);
+                if (done) {
+                    // помечаем чанк обработанным когда закончили обе фазы
+                    nodeManager.markChunkProcessed(t.world(), t.cx, t.cz);
+                    it.remove();
+                }
+                processed++;
+            }
+        }, 1L, 1L);
+    }
+
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent e) {
         World world = e.getWorld();
@@ -62,155 +91,221 @@ public class GenerationListener implements Listener {
         Chunk chunk = e.getChunk();
         int cx = chunk.getX();
         int cz = chunk.getZ();
-        if (!nodeManager.isChunkProcessed(world, cx, cz)) {
-            generateInChunk(chunk);
-            nodeManager.markChunkProcessed(world, cx, cz);
+        if (nodeManager.isChunkProcessed(world, cx, cz)) {
+            nodeManager.processDueRespawnsInChunk(chunk);
+            return;
         }
 
-        // Возрождаем просроченные узлы в этом чанке (если пришло время)
+        // Вместо синхронной генерации — ставим задачу в очередь
+        queueChunk(chunk);
+
+        // Восстановим просроченные респавны (это лёгко)
         nodeManager.processDueRespawnsInChunk(chunk);
     }
 
-    // Публично — для команды
+    // Публично: используется командами вместо прямого generateInChunk
+    public void queueChunk(Chunk chunk) {
+        boolean enabled = plugin.getConfig().getBoolean("generation.queue.enabled", true);
+        if (!enabled) { // фолбэк на синхронный способ (не рекомендую на живом сервере)
+            generateInChunk(chunk);
+            nodeManager.markChunkProcessed(chunk.getWorld(), chunk.getX(), chunk.getZ());
+            return;
+        }
+        queue.add(new GenTask(plugin, nodeManager, random, weights, chunk));
+    }
+
+    // Синхронная генерация (оставил для совместимости и тестов)
     public void generateInChunk(Chunk chunk) {
-        World world = chunk.getWorld();
-        int minY = world.getMinHeight();
-        int layers = Math.max(1, plugin.getConfig().getInt("generation.layers-from-bottom", 7));
-        int maxY = minY + (layers - 1);
+        new GenTask(plugin, nodeManager, random, weights, chunk).runSyncAll();
+    }
 
-        int minSpacing = Math.max(1, plugin.getConfig().getInt("generation.min-spacing", 4));
-        int spacing2 = minSpacing * minSpacing;
+    // ===== ВНУТРЕННИЙ КЛАСС ЗАДАЧИ ПО ЧАНКУ =====
 
-        double baseChance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
-        double densityMul = Math.max(0.0D, plugin.getConfig().getDouble("generation.density-multiplier", 1.0D));
-        double chance = baseChance * densityMul;
+    private static class GenTask {
+        private final Plugin plugin;
+        private final NodeManager nodeManager;
+        private final Random random;
+        private final Map<Material, Integer> weights;
 
-        int targetPerChunk = Math.max(0, plugin.getConfig().getInt("generation.target-per-chunk", 12));
-        int maxPerChunk = Math.max(targetPerChunk, plugin.getConfig().getInt("generation.max-per-chunk", 24));
-        int fillAttemptsPerNode = Math.max(5, plugin.getConfig().getInt("generation.fill-attempts-per-node", 25));
+        private final UUID worldId;
+        private final World world;
+        private final int cx, cz;
+        private final int minY, maxY;
 
-        int placed = 0;
-        List<int[]> placedLocal = new ArrayList<>();
+        private final int minSpacing, spacing2;
+        private final double chance;
+        private final int targetPerChunk, maxPerChunk, fillAttemptsPerNode;
 
-        // 1) Базовый проход по блокам (вероятностный)
-        outer:
-        for (int lx = 0; lx < 16; lx++) {
-            for (int lz = 0; lz < 16; lz++) {
-                for (int y = minY; y <= maxY; y++) {
-                    if (random.nextDouble() > chance) continue;
+        private int lx = 0, lz = 0, y;
+        private boolean basePassDone = false;
+        private int placed = 0;
+        private int fillAttemptsLeft = 0;
 
-                    int x = (chunk.getX() << 4) + lx;
-                    int z = (chunk.getZ() << 4) + lz;
-                    Location loc = new Location(world, x, y, z);
+        private final List<int[]> placedLocal = new ArrayList<>();
 
+        GenTask(Plugin plugin, NodeManager nodeManager, Random rnd, Map<Material, Integer> weights, Chunk chunk) {
+            this.plugin = plugin;
+            this.nodeManager = nodeManager;
+            this.random = new Random(rnd.nextLong());
+            this.weights = weights;
+
+            this.world = chunk.getWorld();
+            this.worldId = world.getUID();
+            this.cx = chunk.getX();
+            this.cz = chunk.getZ();
+
+            int layers = Math.max(1, plugin.getConfig().getInt("generation.layers-from-bottom", 7));
+            this.minY = world.getMinHeight();
+            this.maxY = minY + (layers - 1);
+
+            this.minSpacing = Math.max(1, plugin.getConfig().getInt("generation.min-spacing", 4));
+            this.spacing2 = minSpacing * minSpacing;
+
+            double baseChance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
+            double densityMul = Math.max(0.0D, plugin.getConfig().getDouble("generation.density-multiplier", 1.0D));
+            this.chance = baseChance * densityMul;
+
+            this.targetPerChunk = Math.max(0, plugin.getConfig().getInt("generation.target-per-chunk", 12));
+            this.maxPerChunk = Math.max(targetPerChunk, plugin.getConfig().getInt("generation.max-per-chunk", 24));
+            this.fillAttemptsPerNode = Math.max(5, plugin.getConfig().getInt("generation.fill-attempts-per-node", 25));
+
+            this.y = minY;
+        }
+
+        World world() { return world; }
+        int cx() { return cx; }
+        int cz() { return cz; }
+        boolean isValid() { return world != null; }
+
+        boolean step(int positionsBudget, int fillBudget) {
+            if (!basePassDone) {
+                positionsBudget = Math.max(1, positionsBudget);
+                while (positionsBudget-- > 0) {
+                    if (y > maxY) { basePassDone = true; break; }
+
+                    int x = (cx << 4) + lx;
+                    int z = (cz << 4) + lz;
+
+                    if (random.nextDouble() <= chance) {
+                        Location loc = new Location(world, x, y, z);
+                        Material current = loc.getBlock().getType();
+                        if (isReplaceable(current) && touchesBedrock(loc)
+                                && farEnoughFromExistingNodes2D(loc, minSpacing, spacing2)
+                                && farEnoughFromLocal2D(placedLocal, x, z, spacing2)) {
+                            Material ore = rollOre();
+                            if (ore != null) {
+                                nodeManager.addNode(loc, ore, nodeManager.randomHits());
+                                placedLocal.add(new int[]{x, y, z});
+                                placed++;
+                                if (placed >= maxPerChunk) {
+                                    basePassDone = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // инкремент локальных координат
+                    lx++;
+                    if (lx >= 16) { lx = 0; lz++; }
+                    if (lz >= 16) { lz = 0; y++; }
+                }
+                if (!basePassDone) return false; // база ещё не закончена
+                // рассчитать сколько «добрать»
+                if (placed < targetPerChunk) {
+                    int need = targetPerChunk - placed;
+                    fillAttemptsLeft = Math.max(need * fillAttemptsPerNode, need);
+                }
+            }
+
+            // Фаза «добора»
+            if (fillAttemptsLeft > 0 && placed < targetPerChunk) {
+                int attempts = Math.min(fillAttemptsLeft, Math.max(1, fillBudget));
+                while (attempts-- > 0 && placed < targetPerChunk) {
+                    int rx = (cx << 4) + random.nextInt(16);
+                    int rz = (cz << 4) + random.nextInt(16);
+                    int ry = minY + random.nextInt(Math.max(1, (maxY - minY + 1)));
+
+                    Location loc = new Location(world, rx, ry, rz);
                     Material current = loc.getBlock().getType();
-                    if (!isReplaceable(current)) continue;
-
-                    if (!touchesBedrock(loc)) continue;
-
-                    if (!farEnoughFromExistingNodes(loc, minSpacing, spacing2)) continue;
-                    if (!farEnoughFromLocal(placedLocal, x, y, z, spacing2)) continue;
+                    if (!isReplaceable(current)) { fillAttemptsLeft--; continue; }
+                    if (!touchesBedrock(loc)) { fillAttemptsLeft--; continue; }
+                    if (!farEnoughFromExistingNodes2D(loc, minSpacing, spacing2)) { fillAttemptsLeft--; continue; }
+                    if (!farEnoughFromLocal2D(placedLocal, rx, rz, spacing2)) { fillAttemptsLeft--; continue; }
 
                     Material ore = rollOre();
-                    if (ore == null) continue;
+                    if (ore == null) { fillAttemptsLeft--; continue; }
 
-                    int hits = nodeManager.randomHits();
-                    nodeManager.addNode(loc, ore, hits);
-                    placedLocal.add(new int[]{x, y, z});
+                    nodeManager.addNode(loc, ore, nodeManager.randomHits());
+                    placedLocal.add(new int[]{rx, ry, rz});
                     placed++;
+                    fillAttemptsLeft--;
+                    if (placed >= maxPerChunk) break;
+                }
+                // ещё остались попытки — продолжим в следующий тик
+                if (fillAttemptsLeft > 0 && placed < targetPerChunk) return false;
+            }
 
-                    if (placed >= maxPerChunk) break outer;
+            return true; // задача завершена
+        }
+
+        void runSyncAll() {
+            while (!step(4096, 4096)) { /* синхронно добиваем (только для тестов!) */ }
+        }
+
+        private boolean isReplaceable(Material m) {
+            if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
+            String n = m.name();
+            return n.endsWith("_STONE") || n.endsWith("ANDESITE") || n.endsWith("DIORITE") || n.endsWith("GRANITE");
+        }
+
+        private boolean touchesBedrock(Location loc) {
+            World w = loc.getWorld();
+            int x = loc.getBlockX(), y = loc.getBlockY(), z = loc.getBlockZ();
+            return w.getBlockAt(x + 1, y, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x - 1, y, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y + 1, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y - 1, z).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y, z + 1).getType() == Material.BEDROCK
+                || w.getBlockAt(x, y, z - 1).getType() == Material.BEDROCK;
+        }
+
+        // УДЕШЕВЛЕННАЯ ПРОВЕРКА: только по X/Z (горизонтальная дистанция), без цикла по Y
+        private boolean farEnoughFromExistingNodes2D(Location loc, int spacing, int spacing2) {
+            World w = loc.getWorld();
+            int x = loc.getBlockX(), z = loc.getBlockZ(), y = loc.getBlockY();
+            for (int dx = -spacing; dx <= spacing; dx++) {
+                for (int dz = -spacing; dz <= spacing; dz++) {
+                    int d2 = dx*dx + dz*dz;
+                    if (d2 > spacing2) continue;
+                    // Проверяем тот же Y (можешь расширить на y-1..y+1, если нужно)
+                    if (nodeManager.isNode(new Location(w, x + dx, y, z + dz))) return false;
                 }
             }
-        }
-
-        // 2) Добор до целевого числа узлов (случайные попытки)
-        if (placed < targetPerChunk) {
-            int need = targetPerChunk - placed;
-            int attempts = Math.max(need * fillAttemptsPerNode, need); // страховка
-
-            while (placed < targetPerChunk && attempts-- > 0) {
-                int rx = (chunk.getX() << 4) + random.nextInt(16);
-                int rz = (chunk.getZ() << 4) + random.nextInt(16);
-                int ry = minY + random.nextInt(Math.max(1, (maxY - minY + 1)));
-
-                Location loc = new Location(world, rx, ry, rz);
-                Material current = loc.getBlock().getType();
-                if (!isReplaceable(current)) continue;
-                if (!touchesBedrock(loc)) continue;
-                if (!farEnoughFromExistingNodes(loc, minSpacing, spacing2)) continue;
-                if (!farEnoughFromLocal(placedLocal, rx, ry, rz, spacing2)) continue;
-
-                Material ore = rollOre();
-                if (ore == null) continue;
-
-                int hits = nodeManager.randomHits();
-                nodeManager.addNode(loc, ore, hits);
-                placedLocal.add(new int[]{rx, ry, rz});
-                placed++;
-
-                if (placed >= maxPerChunk) break;
-            }
-        }
-    }
-
-    private boolean isReplaceable(Material m) {
-        if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
-        if (m.name().endsWith("_STONE") || m.name().endsWith("ANDESITE") || m.name().endsWith("DIORITE") || m.name().endsWith("GRANITE")) {
             return true;
         }
-        return false;
-    }
 
-    private boolean touchesBedrock(Location loc) {
-        World w = loc.getWorld();
-        int x = loc.getBlockX();
-        int y = loc.getBlockY();
-        int z = loc.getBlockZ();
-        return w.getBlockAt(x + 1, y, z).getType() == Material.BEDROCK
-            || w.getBlockAt(x - 1, y, z).getType() == Material.BEDROCK
-            || w.getBlockAt(x, y + 1, z).getType() == Material.BEDROCK
-            || w.getBlockAt(x, y - 1, z).getType() == Material.BEDROCK
-            || w.getBlockAt(x, y, z + 1).getType() == Material.BEDROCK
-            || w.getBlockAt(x, y, z - 1).getType() == Material.BEDROCK;
-    }
-
-    private boolean farEnoughFromExistingNodes(Location loc, int spacing, int spacing2) {
-        World w = loc.getWorld();
-        int x = loc.getBlockX();
-        int y = loc.getBlockY();
-        int z = loc.getBlockZ();
-        for (int dx = -spacing; dx <= spacing; dx++) {
-            for (int dy = -spacing; dy <= spacing; dy++) {
-                for (int dz = -spacing; dz <= spacing; dz++) {
-                    int d2 = dx*dx + dy*dy + dz*dz;
-                    if (d2 > spacing2) continue;
-                    if (nodeManager.isNode(new Location(w, x + dx, y + dy, z + dz))) return false;
-                }
+        private boolean farEnoughFromLocal2D(List<int[]> local, int x, int z, int spacing2) {
+            for (int[] p : local) {
+                int dx = p[0] - x;
+                int dz = p[2] - z;
+                if (dx*dx + dz*dz <= spacing2) return false;
             }
+            return true;
         }
-        return true;
-    }
 
-    private boolean farEnoughFromLocal(List<int[]> local, int x, int y, int z, int spacing2) {
-        for (int[] p : local) {
-            int dx = p[0] - x;
-            int dy = p[1] - y;
-            int dz = p[2] - z;
-            if (dx*dx + dy*dy + dz*dz <= spacing2) return false;
+        private Material rollOre() {
+            int total = 0;
+            for (int v : weights.values()) total += v;
+            if (total <= 0) return null;
+            int r = random.nextInt(total), acc = 0;
+            for (Map.Entry<Material, Integer> e : weights.entrySet()) {
+                acc += e.getValue();
+                if (r < acc) return e.getKey();
+            }
+            return null;
         }
-        return true;
-    }
 
-    private Material rollOre() {
-        int total = weights.values().stream().mapToInt(i -> i).sum();
-        if (total <= 0) return null;
-        int r = random.nextInt(total);
-        int acc = 0;
-        for (Map.Entry<Material, Integer> e : weights.entrySet()) {
-            acc += e.getValue();
-            if (r < acc) return e.getKey();
-        }
-        return null;
+        UUID world() { return worldId; }
     }
 }
