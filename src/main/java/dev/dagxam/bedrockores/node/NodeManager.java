@@ -16,8 +16,11 @@ import java.util.*;
 public class NodeManager {
     private final Plugin plugin;
 
+    // Активные узлы
     private final Map<String, NodeData> nodes = new HashMap<>();
+    // Обработанные чанки (для одноразовой генерации)
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
+    // Очередь респаунов
     private final Map<String, RespawnData> respawns = new HashMap<>();
 
     private final File dataFile;
@@ -109,43 +112,78 @@ public class NodeManager {
         return count;
     }
 
+    // Планирование респауна через delay-seconds (по умолчанию 3600)
     public void scheduleRespawn(Location loc, Material oreType) {
         if (!plugin.getConfig().getBoolean("respawn.enabled", true)) return;
         long delaySec = plugin.getConfig().getLong("respawn.delay-seconds", 3600L);
         long due = System.currentTimeMillis() + delaySec * 1000L;
         respawns.put(key(loc), new RespawnData(oreType, due));
-        save();
+        save(); // чтобы пережило рестарт
     }
 
+    // Проверяем, кому пора возродиться (только для загруженных чанков!)
     public void tickRespawns() {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
-        List<String> ready = new ArrayList<>();
-        for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
-            if (e.getValue().dueAtMillis <= now) ready.add(e.getKey());
-        }
-        if (ready.isEmpty()) return;
 
-        for (String k : ready) {
-            Location loc = locationFromKey(k);
-            RespawnData rd = respawns.get(k);
-            if (loc == null || rd == null) { respawns.remove(k); continue; }
+        List<String> done = new ArrayList<>();
+        for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
+            RespawnData rd = e.getValue();
+            if (rd.dueAtMillis > now) continue;
+
+            Location loc = locationFromKey(e.getKey());
+            if (loc == null) { done.add(e.getKey()); continue; }
             World w = loc.getWorld();
-            if (w == null) { respawns.remove(k); continue; }
+            if (w == null) { done.add(e.getKey()); continue; }
+
+            // Не форсим загрузку чанка! Ждем, пока он будет загружен
             if (!loc.getChunk().isLoaded()) {
-                boolean loaded = loc.getChunk().load();
-                if (!loaded) continue;
+                continue;
             }
+
             int hits = randomHits();
             addNode(loc, rd.oreMaterial, hits);
-            respawns.remove(k);
+            done.add(e.getKey());
         }
-        save();
+        for (String k : done) respawns.remove(k);
+        if (!done.isEmpty()) save();
+    }
+
+    // Вызывается при загрузке чанка — возрождаем все просроченные узлы в этом чанке
+    public void processDueRespawnsInChunk(Chunk chunk) {
+        if (respawns.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        UUID wid = chunk.getWorld().getUID();
+        int cx = chunk.getX();
+        int cz = chunk.getZ();
+
+        List<String> done = new ArrayList<>();
+        for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
+            String[] p = e.getKey().split(":");
+            if (p.length != 4) continue;
+            UUID w = UUID.fromString(p[0]);
+            if (!w.equals(wid)) continue;
+
+            int x = Integer.parseInt(p[1]);
+            int y = Integer.parseInt(p[2]);
+            int z = Integer.parseInt(p[3]);
+            if ((x >> 4) != cx || (z >> 4) != cz) continue;
+
+            RespawnData rd = e.getValue();
+            if (rd.dueAtMillis > now) continue;
+
+            Location loc = new Location(chunk.getWorld(), x, y, z);
+            addNode(loc, rd.oreMaterial, randomHits());
+            done.add(e.getKey());
+        }
+        for (String k : done) respawns.remove(k);
+        if (!done.isEmpty()) save();
     }
 
     private Location locationFromKey(String k) {
         try {
             String[] parts = k.split(":");
+            if (parts.length != 4) return null;
             UUID world = UUID.fromString(parts[0]);
             int x = Integer.parseInt(parts[1]);
             int y = Integer.parseInt(parts[2]);
@@ -180,7 +218,9 @@ public class NodeManager {
                     Location loc = new Location(w, x, y, z);
 
                     nodes.put(key(loc), new NodeData(mat, hits, maxHits));
-                    if (loc.getBlock().getType() != mat) loc.getBlock().setType(mat, false);
+                    if (loc.getBlock().getType() != mat) {
+                        loc.getBlock().setType(mat, false);
+                    }
                 } catch (Exception e) {
                     plugin.getLogger().warning("Bad node entry: " + id + " -> " + e.getMessage());
                 }
@@ -222,6 +262,7 @@ public class NodeManager {
                     World w = Bukkit.getWorld(worldId);
                     if (w == null) continue;
                     Location loc = new Location(w, x, y, z);
+
                     respawns.put(key(loc), new RespawnData(mat, due));
                 } catch (Exception e) {
                     plugin.getLogger().warning("Bad respawn entry: " + id + " -> " + e.getMessage());
@@ -229,11 +270,12 @@ public class NodeManager {
             }
         }
 
-        plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processed worlds=" + processedChunks.size());
+        plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processedChunks worlds=" + processedChunks.size());
     }
 
     public void save() {
         YamlConfiguration yml = new YamlConfiguration();
+
         int i = 0;
         for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
             String id = "n" + (i++);
