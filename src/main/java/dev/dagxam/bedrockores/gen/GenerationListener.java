@@ -66,10 +66,9 @@ public class GenerationListener implements Listener {
     private void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
         int minY = world.getMinHeight();
-        int maxY = minY + 3; // 4 слоя над бедроком
+        int maxY = minY + 3; // только самый низ: 4 слоя над нижней границей мира
 
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
-        int radius = plugin.getConfig().getInt("generation.bedrock-radius", 1);
 
         for (int lx = 0; lx < 16; lx++) {
             for (int lz = 0; lz < 16; lz++) {
@@ -82,7 +81,9 @@ public class GenerationListener implements Listener {
 
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
-                    if (!isNearBedrock(loc, radius)) continue;
+
+                    // Строго вплотную к бедроку (по 6 сторонам)
+                    if (!touchesBedrock(loc)) continue;
 
                     Material ore = rollOre();
                     if (ore == null) continue;
@@ -102,17 +103,18 @@ public class GenerationListener implements Listener {
         return false;
     }
 
-    private boolean isNearBedrock(Location loc, int radius) {
+    private boolean touchesBedrock(Location loc) {
         World w = loc.getWorld();
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -radius; dy <= radius; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    Material m = w.getBlockAt(loc.getBlockX() + dx, loc.getBlockY() + dy, loc.getBlockZ() + dz).getType();
-                    if (m == Material.BEDROCK) return true;
-                }
-            }
-        }
-        return false;
+        int x = loc.getBlockX();
+        int y = loc.getBlockY();
+        int z = loc.getBlockZ();
+        // Проверяем 6 граней
+        return w.getBlockAt(x + 1, y, z).getType() == Material.BEDROCK
+            || w.getBlockAt(x - 1, y, z).getType() == Material.BEDROCK
+            || w.getBlockAt(x, y + 1, z).getType() == Material.BEDROCK
+            || w.getBlockAt(x, y - 1, z).getType() == Material.BEDROCK
+            || w.getBlockAt(x, y, z + 1).getType() == Material.BEDROCK
+            || w.getBlockAt(x, y, z - 1).getType() == Material.BEDROCK;
     }
 
     private Material rollOre() {
