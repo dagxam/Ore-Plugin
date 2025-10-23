@@ -23,7 +23,9 @@ ore-weights:
 respawn:
   enabled: true
   delay-seconds: 3600   # 1 час
+  
 performance:
-  direct-item-to-inventory: true  # класть в инвентарь, а не спавнить item-энтити
-  xp-mode: direct                 # direct | orb
-  hit-cooldown-ms: 200            # анти-спам (как сейчас); можно 150-250
+  direct-item-to-inventory: true
+  xp-mode: direct           # direct | orb
+  hold-hit-interval-ticks: 4
+  hold-timeout-ms: 350
