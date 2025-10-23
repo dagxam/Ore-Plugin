@@ -27,5 +27,7 @@ respawn:
 performance:
   direct-item-to-inventory: true
   xp-mode: direct           # direct | orb
-  hold-hit-interval-ticks: 4
-  hold-timeout-ms: 350
+  hold-hit-interval-ticks: 5
+  hold-timeout-ms: 400
+  max-hold-hits-per-tick: 60
+  
