@@ -11,7 +11,9 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.plugin.Plugin;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
@@ -65,9 +67,8 @@ public class GenerationListener implements Listener {
             nodeManager.markChunkProcessed(world, cx, cz);
         }
 
-        // Восстанавливаем «просроченные» руды в этом чанке (если их время уже пришло)
+        // Возрождаем просроченные узлы в этом чанке (если пришло время)
         nodeManager.processDueRespawnsInChunk(chunk);
-        // Сохранять на каждом ChunkLoad не обязательно; у нас есть периодический save()
     }
 
     // Публично — вызывается и командой
@@ -77,7 +78,13 @@ public class GenerationListener implements Listener {
         int layers = Math.max(1, plugin.getConfig().getInt("generation.layers-from-bottom", 7));
         int maxY = minY + (layers - 1);
 
+        int spacing = Math.max(1, plugin.getConfig().getInt("generation.min-spacing", 4));
+        int spacing2 = spacing * spacing;
+
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
+
+        // локальные принятые позиции в этом прогоне (чтобы не ставить узлы близко внутри одного чанка)
+        List<int[]> placedLocal = new ArrayList<>();
 
         for (int lx = 0; lx < 16; lx++) {
             for (int lz = 0; lz < 16; lz++) {
@@ -91,14 +98,21 @@ public class GenerationListener implements Listener {
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
 
+                    // строго вплотную к бедроку
                     if (!touchesBedrock(loc)) continue;
-                    if (adjacentToNode(loc)) continue;
+
+                    // дистанция до уже существующих узлов (в соседних чанках)
+                    if (!farEnoughFromExistingNodes(loc, spacing, spacing2)) continue;
+
+                    // дистанция до узлов, поставленных в этом же чанке прямо сейчас
+                    if (!farEnoughFromLocal(placedLocal, x, y, z, spacing2)) continue;
 
                     Material ore = rollOre();
                     if (ore == null) continue;
 
                     int hits = nodeManager.randomHits();
                     nodeManager.addNode(loc, ore, hits);
+                    placedLocal.add(new int[]{x, y, z});
                 }
             }
         }
@@ -125,18 +139,32 @@ public class GenerationListener implements Listener {
             || w.getBlockAt(x, y, z - 1).getType() == Material.BEDROCK;
     }
 
-    private boolean adjacentToNode(Location loc) {
+    private boolean farEnoughFromExistingNodes(Location loc, int spacing, int spacing2) {
         World w = loc.getWorld();
         int x = loc.getBlockX();
         int y = loc.getBlockY();
         int z = loc.getBlockZ();
-        return isNodeAt(w, x + 1, y, z) || isNodeAt(w, x - 1, y, z)
-            || isNodeAt(w, x, y + 1, z) || isNodeAt(w, x, y - 1, z)
-            || isNodeAt(w, x, y, z + 1) || isNodeAt(w, x, y, z - 1);
+        for (int dx = -spacing; dx <= spacing; dx++) {
+            for (int dy = -spacing; dy <= spacing; dy++) {
+                for (int dz = -spacing; dz <= spacing; dz++) {
+                    int d2 = dx*dx + dy*dy + dz*dz;
+                    if (d2 > spacing2) continue;
+                    Location check = new Location(w, x + dx, y + dy, z + dz);
+                    if (nodeManager.isNode(check)) return false;
+                }
+            }
+        }
+        return true;
     }
 
-    private boolean isNodeAt(World w, int x, int y, int z) {
-        return nodeManager.isNode(new Location(w, x, y, z));
+    private boolean farEnoughFromLocal(List<int[]> local, int x, int y, int z, int spacing2) {
+        for (int[] p : local) {
+            int dx = p[0] - x;
+            int dy = p[1] - y;
+            int dz = p[2] - z;
+            if (dx*dx + dy*dy + dz*dz <= spacing2) return false;
+        }
+        return true;
     }
 
     private Material rollOre() {
