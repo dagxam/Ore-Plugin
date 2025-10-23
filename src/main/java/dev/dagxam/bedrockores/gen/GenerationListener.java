@@ -74,8 +74,8 @@ public class GenerationListener implements Listener {
                 if (!t.isValid()) { it.remove(); continue; }
                 boolean done = t.step(posPerTick, fillPerTick);
                 if (done) {
-                    // помечаем чанк обработанным когда закончили обе фазы
-                    nodeManager.markChunkProcessed(t.world(), t.cx, t.cz);
+                    // чанк помечаем обработанным, когда обе фазы завершены
+                    nodeManager.markChunkProcessed(t.getWorld(), t.getCx(), t.getCz());
                     it.remove();
                 }
                 processed++;
@@ -99,14 +99,15 @@ public class GenerationListener implements Listener {
         // Вместо синхронной генерации — ставим задачу в очередь
         queueChunk(chunk);
 
-        // Восстановим просроченные респавны (это лёгко)
+        // Возвращаем просроченные респавны в этом чанке (лёгкая операция)
         nodeManager.processDueRespawnsInChunk(chunk);
     }
 
     // Публично: используется командами вместо прямого generateInChunk
     public void queueChunk(Chunk chunk) {
         boolean enabled = plugin.getConfig().getBoolean("generation.queue.enabled", true);
-        if (!enabled) { // фолбэк на синхронный способ (не рекомендую на живом сервере)
+        if (!enabled) {
+            // Фолбэк на синхронный режим (не рекомендуется на живом сервере)
             generateInChunk(chunk);
             nodeManager.markChunkProcessed(chunk.getWorld(), chunk.getX(), chunk.getZ());
             return;
@@ -114,13 +115,12 @@ public class GenerationListener implements Listener {
         queue.add(new GenTask(plugin, nodeManager, random, weights, chunk));
     }
 
-    // Синхронная генерация (оставил для совместимости и тестов)
+    // Синхронная генерация (только для совместимости/тестов)
     public void generateInChunk(Chunk chunk) {
         new GenTask(plugin, nodeManager, random, weights, chunk).runSyncAll();
     }
 
-    // ===== ВНУТРЕННИЙ КЛАСС ЗАДАЧИ ПО ЧАНКУ =====
-
+    // ===== ВНУТРЕННЯЯ ЗАДАЧА ПО ОДНОМУ ЧАНКУ =====
     private static class GenTask {
         private final Plugin plugin;
         private final NodeManager nodeManager;
@@ -172,10 +172,11 @@ public class GenerationListener implements Listener {
             this.y = minY;
         }
 
-        World world() { return world; }
-        int cx() { return cx; }
-        int cz() { return cz; }
-        boolean isValid() { return world != null; }
+        public World getWorld() { return world; }
+        public UUID getWorldId() { return worldId; }
+        public int getCx() { return cx; }
+        public int getCz() { return cz; }
+        public boolean isValid() { return world != null; }
 
         boolean step(int positionsBudget, int fillBudget) {
             if (!basePassDone) {
@@ -211,7 +212,7 @@ public class GenerationListener implements Listener {
                     if (lz >= 16) { lz = 0; y++; }
                 }
                 if (!basePassDone) return false; // база ещё не закончена
-                // рассчитать сколько «добрать»
+                // рассчитать «добор»
                 if (placed < targetPerChunk) {
                     int need = targetPerChunk - placed;
                     fillAttemptsLeft = Math.max(need * fillAttemptsPerNode, need);
@@ -242,7 +243,6 @@ public class GenerationListener implements Listener {
                     fillAttemptsLeft--;
                     if (placed >= maxPerChunk) break;
                 }
-                // ещё остались попытки — продолжим в следующий тик
                 if (fillAttemptsLeft > 0 && placed < targetPerChunk) return false;
             }
 
@@ -253,59 +253,4 @@ public class GenerationListener implements Listener {
             while (!step(4096, 4096)) { /* синхронно добиваем (только для тестов!) */ }
         }
 
-        private boolean isReplaceable(Material m) {
-            if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
-            String n = m.name();
-            return n.endsWith("_STONE") || n.endsWith("ANDESITE") || n.endsWith("DIORITE") || n.endsWith("GRANITE");
-        }
-
-        private boolean touchesBedrock(Location loc) {
-            World w = loc.getWorld();
-            int x = loc.getBlockX(), y = loc.getBlockY(), z = loc.getBlockZ();
-            return w.getBlockAt(x + 1, y, z).getType() == Material.BEDROCK
-                || w.getBlockAt(x - 1, y, z).getType() == Material.BEDROCK
-                || w.getBlockAt(x, y + 1, z).getType() == Material.BEDROCK
-                || w.getBlockAt(x, y - 1, z).getType() == Material.BEDROCK
-                || w.getBlockAt(x, y, z + 1).getType() == Material.BEDROCK
-                || w.getBlockAt(x, y, z - 1).getType() == Material.BEDROCK;
-        }
-
-        // УДЕШЕВЛЕННАЯ ПРОВЕРКА: только по X/Z (горизонтальная дистанция), без цикла по Y
-        private boolean farEnoughFromExistingNodes2D(Location loc, int spacing, int spacing2) {
-            World w = loc.getWorld();
-            int x = loc.getBlockX(), z = loc.getBlockZ(), y = loc.getBlockY();
-            for (int dx = -spacing; dx <= spacing; dx++) {
-                for (int dz = -spacing; dz <= spacing; dz++) {
-                    int d2 = dx*dx + dz*dz;
-                    if (d2 > spacing2) continue;
-                    // Проверяем тот же Y (можешь расширить на y-1..y+1, если нужно)
-                    if (nodeManager.isNode(new Location(w, x + dx, y, z + dz))) return false;
-                }
-            }
-            return true;
-        }
-
-        private boolean farEnoughFromLocal2D(List<int[]> local, int x, int z, int spacing2) {
-            for (int[] p : local) {
-                int dx = p[0] - x;
-                int dz = p[2] - z;
-                if (dx*dx + dz*dz <= spacing2) return false;
-            }
-            return true;
-        }
-
-        private Material rollOre() {
-            int total = 0;
-            for (int v : weights.values()) total += v;
-            if (total <= 0) return null;
-            int r = random.nextInt(total), acc = 0;
-            for (Map.Entry<Material, Integer> e : weights.entrySet()) {
-                acc += e.getValue();
-                if (r < acc) return e.getKey();
-            }
-            return null;
-        }
-
-        UUID world() { return worldId; }
-    }
-}
+        private boolean isReplaceable(Material 
