@@ -15,9 +15,7 @@ import java.util.*;
 public class NodeManager {
     private final Plugin plugin;
 
-    // Ключ: worldUUID:x:y:z
     private final Map<String, NodeData> nodes = new HashMap<>();
-    // Обработанные чанки (чтобы не генерировать повторно)
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
 
     private final File dataFile;
@@ -84,7 +82,6 @@ public class NodeManager {
                     Location loc = new Location(w, x, y, z);
 
                     nodes.put(key(loc), new NodeData(mat, hits, maxHits));
-                    // восстановим отображение блока, если кто-то его менял
                     if (loc.getBlock().getType() != mat) {
                         loc.getBlock().setType(mat, false);
                     }
