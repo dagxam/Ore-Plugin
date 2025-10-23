@@ -1,4 +1,4 @@
-package dev.example.bedrockores.node;
+package dev.dagxam.bedrockores.node;
 
 import org.bukkit.*;
 import org.bukkit.enchantments.Enchantment;
