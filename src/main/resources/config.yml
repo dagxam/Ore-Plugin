@@ -32,4 +32,10 @@ performance:
   hold-hit-interval-ticks: 5
   hold-timeout-ms: 400
   max-hold-hits-per-tick: 60
+
+   queue:
+    enabled: true
+    chunks-per-tick: 2          # сколько чанков начинаем/продолжаем за тик
+    positions-per-tick: 280     # сколько «кандидатов» проверяем за тик
+    fill-attempts-per-tick: 150 # попыток «добора» за тик (после основного прохода)
   
