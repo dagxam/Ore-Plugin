@@ -2,11 +2,13 @@ enabled-worlds:
   - world
 
 generation:
-  chance-per-block: 0.008
-  bedrock-radius: 1
-  min-hits: 15
-  max-hits: 25
   layers-from-bottom: 7
+  chance-per-block: 0.008
+  density-multiplier: 1.0      # множитель к chance-per-block
+  min-spacing: 4               # минимальная дистанция между узлами (4–5 по твоему ТЗ)
+  target-per-chunk: 12         # целевое кол-во узлов на чанк
+  max-per-chunk: 24            # максимум узлов на чанк (страховка)
+  fill-attempts-per-node: 25   # попыток на каждый недостающий узел при доборе
 
 fortune-enabled: true
 
