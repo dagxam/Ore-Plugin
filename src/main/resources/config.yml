@@ -6,7 +6,7 @@ generation:
   bedrock-radius: 1
   min-hits: 15
   max-hits: 25
-  layers-from-bottom: 7   # НОВОЕ: сколько слоёв от минимума мира
+  layers-from-bottom: 7
 
 fortune-enabled: true
 
@@ -19,3 +19,7 @@ ore-weights:
   DEEPSLATE_LAPIS_ORE: 3
   DEEPSLATE_DIAMOND_ORE: 1
   DEEPSLATE_EMERALD_ORE: 1
+
+respawn:
+  enabled: true
+  delay-seconds: 3600   # 1 час
