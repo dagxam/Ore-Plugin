@@ -1,1 +1,15 @@
-
+name: BedrockOres
+main: dev.example.bedrockores.BedrockOresPlugin
+version: 1.0.0
+api-version: '1.21'
+load: POSTWORLD
+prefix: BedrockOres
+authors: [ "your-name" ]
+description: Unbreakable ore nodes near bedrock that drop items on hit and turn into bedrock after N hits.
+commands:
+  bedrockores:
+    description: Bedrock Ores admin command
+    permission: bedrockores.admin
+permissions:
+  bedrockores.admin:
+    default: op
