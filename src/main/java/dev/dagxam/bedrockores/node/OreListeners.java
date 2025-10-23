@@ -34,6 +34,7 @@ public class OreListeners implements Listener {
     private final NodeManager nm;
     private final Random rnd = new Random();
 
+    // Анти-дубль (защита от нескольких событий за один клик)
     private final Map<String, Long> lastHitAt = new HashMap<>();
 
     public OreListeners(Plugin plugin, NodeManager nm) {
@@ -41,6 +42,7 @@ public class OreListeners implements Listener {
         this.nm = nm;
     }
 
+    // Первый перехват — левый клик по блоку
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onLeftClick(PlayerInteractEvent e) {
         if (e.getAction() != Action.LEFT_CLICK_BLOCK) return;
@@ -58,6 +60,7 @@ public class OreListeners implements Listener {
         }
     }
 
+    // Доп. перехват — "повреждение" блока (progress bar)
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onBlockDamage(BlockDamageEvent e) {
         Block block = e.getBlock();
@@ -74,6 +77,7 @@ public class OreListeners implements Listener {
         }
     }
 
+    // Резерв — попытка слома (всегда запрещаем)
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onBlockBreak(BlockBreakEvent e) {
         Block block = e.getBlock();
@@ -93,6 +97,7 @@ public class OreListeners implements Listener {
         String key = NodeManager.key(block.getLocation());
         long now = System.nanoTime();
         Long prev = lastHitAt.get(key);
+        // 200 мс защита от повторных срабатываний для одного клика
         if (prev != null && (now - prev) < 200_000_000L) {
             return false;
         }
@@ -100,21 +105,30 @@ public class OreListeners implements Listener {
         return true;
     }
 
+    // Возвращаем клиенту корректное состояние блока на следующем тике
     private void refreshClientBlock(Block block) {
         Bukkit.getScheduler().runTask(plugin, () -> block.getState().update(true, false));
     }
 
     private void handleHit(Player p, Block block, NodeData nd) {
+        // Дроп на каждый удар
         giveOreDrop(p, block, nd);
 
+        // Считаем удар
         nd.hitsRemaining--;
 
         if (nd.hitsRemaining <= 0) {
+            // Планируем респаун этой же руды через заданную задержку (по умолчанию 1 час)
+            nm.scheduleRespawn(block.getLocation(), nd.oreMaterial);
+
+            // Превращаемся в бедрок и снимаем узел
             block.setType(Material.BEDROCK, false);
             block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_ANVIL_PLACE, 0.7f, 0.8f);
             nm.removeNode(block.getLocation());
+
             p.sendActionBar(Component.text("Осталось ударов: 0/" + nd.maxHits));
         } else {
+            // Эффекты и прогресс
             block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_STONE_HIT, 0.8f, 1.0f);
             block.getWorld().spawnParticle(
                 Particle.BLOCK,
@@ -141,6 +155,7 @@ public class OreListeners implements Listener {
 
         int amount = baseAmount(nd.oreMaterial);
         if (fortuneEnabled && fortune > 0) {
+            // Простая модель Fortune: умножаем на (1 + random(0..fortune))
             amount *= (1 + rnd.nextInt(fortune + 1));
         }
 
@@ -159,20 +174,20 @@ public class OreListeners implements Listener {
 
     private int baseAmount(Material ore) {
         switch (ore) {
-            case DEEPSLATE_REDSTONE_ORE: return 3 + rnd.nextInt(3);
-            case DEEPSLATE_LAPIS_ORE:    return 3 + rnd.nextInt(3);
-            case DEEPSLATE_COPPER_ORE:   return 1 + rnd.nextInt(2);
-            default: return 1;
+            case DEEPSLATE_REDSTONE_ORE: return 3 + rnd.nextInt(3); // 3-5
+            case DEEPSLATE_LAPIS_ORE:    return 3 + rnd.nextInt(3); // 3-5
+            case DEEPSLATE_COPPER_ORE:   return 1 + rnd.nextInt(2); // 1-2
+            default: return 1; // алмазы, изумруды, уголь, железо, золото
         }
     }
 
     private int xpFor(Material ore) {
         switch (ore) {
-            case DEEPSLATE_DIAMOND_ORE: return 3 + rnd.nextInt(5);
+            case DEEPSLATE_DIAMOND_ORE: return 3 + rnd.nextInt(5); // 3-7
             case DEEPSLATE_EMERALD_ORE: return 3 + rnd.nextInt(5);
             case DEEPSLATE_REDSTONE_ORE: return 1 + rnd.nextInt(5);
             case DEEPSLATE_LAPIS_ORE: return 1 + rnd.nextInt(5);
-            case DEEPSLATE_COAL_ORE: return rnd.nextInt(2);
+            case DEEPSLATE_COAL_ORE: return rnd.nextInt(2); // 0-1
             default: return 0;
         }
     }
@@ -191,6 +206,7 @@ public class OreListeners implements Listener {
         }
     }
 
+    // Защита от взрывов
     @EventHandler
     public void onEntityExplode(EntityExplodeEvent e) {
         Iterator<Block> it = e.blockList().iterator();
@@ -209,6 +225,7 @@ public class OreListeners implements Listener {
         }
     }
 
+    // Защита от поршней
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPistonExtend(BlockPistonExtendEvent e) {
         for (Block b : e.getBlocks()) {
