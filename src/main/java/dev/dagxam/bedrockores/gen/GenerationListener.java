@@ -66,7 +66,8 @@ public class GenerationListener implements Listener {
     private void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
         int minY = world.getMinHeight();
-        int maxY = minY + 3; // нижние 4 слоя
+        int layers = Math.max(1, plugin.getConfig().getInt("generation.layers-from-bottom", 7));
+        int maxY = minY + (layers - 1); // 7 слоев: minY..minY+6
 
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
 
@@ -82,10 +83,10 @@ public class GenerationListener implements Listener {
                     Material current = loc.getBlock().getType();
                     if (!isReplaceable(current)) continue;
 
-                    // строго касаемся бедрока по 6 граням
+                    // Строго вплотную к бедроку
                     if (!touchesBedrock(loc)) continue;
 
-                    // одиночный блок — не ставим рядом с другим узлом
+                    // Одиночные узлы — не ставим рядом с другим узлом
                     if (adjacentToNode(loc)) continue;
 
                     Material ore = rollOre();
