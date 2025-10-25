@@ -1,56 +1,92 @@
-public void save() {
-    YamlConfiguration yml = new YamlConfiguration();
+package dev.dagxam.bedrockores.visual;
 
-    int i = 0;
-    for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
-        String[] parts = e.getKey().split(":");
-        UUID world = UUID.fromString(parts[0]);
-        int x = Integer.parseInt(parts[1]);
-        int y = Integer.parseInt(parts[2]);
-        int z = Integer.parseInt(parts[3]);
+import dev.dagxam.bedrockores.node.NodeManager;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.Particle;
+import org.bukkit.World;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 
-        NodeData nd = e.getValue();
-        String path = "nodes.n" + (i++);
-        yml.set(path + ".world", world.toString());
-        yml.set(path + ".x", x);
-        yml.set(path + ".y", y);
-        yml.set(path + ".z", z);
-        yml.set(path + ".type", nd.oreMaterial.name());
-        yml.set(path + ".hits", nd.hitsRemaining);
-        yml.set(path + ".maxHits", nd.maxHits);
+import java.util.Collections;
+import java.util.List;
+import java.util.Random;
+
+public class VisualParticles {
+    private final Plugin plugin;
+    private final NodeManager nm;
+    private final Random rnd = new Random();
+    private BukkitTask task;
+
+    private final Particle particle;
+    private final int count;
+    private final double offset;
+    private final double extra;
+    private final double perNodeChance;
+    private final int periodTicks;
+    private final int radiusChunks;
+    private final int maxNodesPerTick;
+
+    public VisualParticles(Plugin plugin, NodeManager nm) {
+        this.plugin = plugin;
+        this.nm = nm;
+
+        String type = plugin.getConfig().getString("visual.particles.type", "END_ROD");
+        Particle p;
+        try { p = Particle.valueOf(type); } catch (Exception e) { p = Particle.END_ROD; }
+        this.particle = p;
+
+        this.count = Math.max(1, plugin.getConfig().getInt("visual.particles.count", 1));
+        this.offset = plugin.getConfig().getDouble("visual.particles.offset", 0.12);
+        this.extra = plugin.getConfig().getDouble("visual.particles.extra", 0.0);
+        this.perNodeChance = plugin.getConfig().getDouble("visual.particles.per-node-chance", 0.12);
+        this.periodTicks = Math.max(5, plugin.getConfig().getInt("visual.particles.period-ticks", 20));
+        this.radiusChunks = Math.max(1, plugin.getConfig().getInt("visual.particles.radius-chunks", 2));
+        this.maxNodesPerTick = Math.max(10, plugin.getConfig().getInt("visual.particles.max-nodes-per-tick", 150));
     }
 
-    for (Map.Entry<UUID, Set<Long>> e : processedChunks.entrySet()) {
-        List<String> list = new ArrayList<>();
-        for (Long ck : e.getValue()) {
-            int cx = (int) (ck >> 32);
-            int cz = (int) (ck & 0xffffffffL);
-            list.add(cx + ":" + cz);
+    public void start() {
+        stop();
+        task = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, periodTicks, periodTicks);
+    }
+
+    public void stop() {
+        if (task != null) {
+            task.cancel();
+            task = null;
         }
-        yml.set("processedChunks." + e.getKey().toString(), list);
     }
 
-    int r = 0;
-    for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
-        String[] parts = e.getKey().split(":");
-        UUID world = UUID.fromString(parts[0]);
-        int x = Integer.parseInt(parts[1]);
-        int y = Integer.parseInt(parts[2]);
-        int z = Integer.parseInt(parts[3]);
+    private void tick() {
+        int budget = maxNodesPerTick;
 
-        RespawnData rd = e.getValue();
-        String path = "respawns.r" + (r++);
-        yml.set(path + ".world", world.toString());
-        yml.set(path + ".x", x);
-        yml.set(path + ".y", y);
-        yml.set(path + ".z", z);
-        yml.set(path + ".type", rd.oreMaterial.name());
-        yml.set(path + ".dueAt", rd.dueAtMillis);
-    }
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            if (budget <= 0) break;
 
-    try {
-        yml.save(dataFile);
-    } catch (IOException ex) {
-        plugin.getLogger().severe("Failed to save nodes.yml: " + ex.getMessage());
+            World w = p.getWorld();
+            int cx = p.getLocation().getBlockX() >> 4;
+            int cz = p.getLocation().getBlockZ() >> 4;
+
+            List<Location> nodes = nm.getNodesAroundChunks(w, cx, cz, radiusChunks);
+            if (nodes.isEmpty()) continue;
+
+            Collections.shuffle(nodes, rnd);
+
+            for (Location loc : nodes) {
+                if (budget <= 0) break;
+                if (!loc.getChunk().isLoaded()) continue;
+                if (rnd.nextDouble() > perNodeChance) continue;
+
+                w.spawnParticle(
+                        particle,
+                        loc.getBlockX() + 0.5,
+                        loc.getBlockY() + 0.7,
+                        loc.getBlockZ() + 0.5,
+                        count, offset, offset, offset, extra
+                );
+                budget--;
+            }
+        }
     }
 }
