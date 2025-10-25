@@ -1,71 +1,113 @@
-import dev.dagxam.bedrockores.visual.VisualFakeBlock;
-// ...
+package dev.dagxam.bedrockores.visual;
 
-public class BedrockOresPlugin extends JavaPlugin {
+import dev.dagxam.bedrockores.node.NodeManager;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 
-    private NodeManager nodeManager;
-    private GenerationListener generationListener;
+import java.util.*;
 
-    // визуальные режимы
-    private VisualOverlay visualOverlay;      // если используешь overlay
-    private VisualParticles visualParticles;  // если используешь particles
-    private VisualFakeBlock visualFakeBlock;  // НОВОЕ
+public class VisualFakeBlock {
 
-    @Override
-    public void onEnable() {
-        saveDefaultConfig();
+    private final Plugin plugin;
+    private final NodeManager nm;
 
-        this.nodeManager = new NodeManager(this);
-        nodeManager.load();
+    private final Material fakeMaterial;
+    private final BlockData fakeData;
+    private final int periodTicks;
+    private final int radiusChunks;
 
-        String visMode = getConfig().getString("visual.mode", "none").toLowerCase();
+    // какие узлы уже "перекрашены" для каждого игрока: playerUUID -> set(nodeKey)
+    private final Map<UUID, Set<String>> shown = new HashMap<>();
+    private BukkitTask task;
 
-        switch (visMode) {
-            case "overlay": {
-                visualOverlay = new VisualOverlay(this, nodeManager);
-                nodeManager.setOverlay(visualOverlay);
-                Bukkit.getScheduler().runTask(this, visualOverlay::syncAllFromNodes);
-                break;
-            }
-            case "particles": {
-                visualParticles = new VisualParticles(this, nodeManager);
-                visualParticles.start();
-                break;
-            }
-            case "fakeblock": {
-                visualFakeBlock = new VisualFakeBlock(this, nodeManager);
-                visualFakeBlock.start();
-                break;
-            }
-            default:
-                // none
-        }
+    public VisualFakeBlock(Plugin plugin, NodeManager nm) {
+        this.plugin = plugin;
+        this.nm = nm;
 
-        this.generationListener = new GenerationListener(this, nodeManager);
-        Bukkit.getPluginManager().registerEvents(generationListener, this);
-        Bukkit.getPluginManager().registerEvents(new OreListeners(this, nodeManager), this);
+        String matName = plugin.getConfig().getString("visual.fakeblock.material", "LIGHT_BLUE_STAINED_GLASS");
+        Material mat;
+        try { mat = Material.valueOf(matName); } catch (Exception e) { mat = Material.LIGHT_BLUE_STAINED_GLASS; }
+        this.fakeMaterial = mat;
+        this.fakeData = fakeMaterial.createBlockData();
 
-        Bukkit.getScheduler().runTaskTimer(this, nodeManager::save, 20L * 60L, 20L * 60L);
-        Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
-
-        BedrockOresCommand cmd = new BedrockOresCommand(this, nodeManager, generationListener);
-        if (getCommand("bedrockores") != null) {
-            getCommand("bedrockores").setExecutor(cmd);
-            getCommand("bedrockores").setTabCompleter(cmd);
-        }
-
-        getLogger().info("BedrockOres enabled.");
+        this.periodTicks = Math.max(5, plugin.getConfig().getInt("visual.fakeblock.period-ticks", 20));
+        this.radiusChunks = Math.max(1, plugin.getConfig().getInt("visual.fakeblock.radius-chunks", 3));
     }
 
-    @Override
-    public void onDisable() {
-        try {
-            if (visualFakeBlock != null) visualFakeBlock.stop();
-            if (visualParticles != null) visualParticles.stop();
-            if (visualOverlay != null) visualOverlay.cleanup();
-            nodeManager.save();
-        } catch (Exception e) {
-            getLogger().severe("Failed to save nodes: " + e.getMessage());
+    public void start() {
+        stop();
+        task = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, periodTicks, periodTicks);
+    }
+
+    public void stop() {
+        // Вернём всем игрокам реальные блоки вместо фейковых
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            Set<String> set = shown.get(p.getUniqueId());
+            if (set == null) continue;
+            for (String key : new HashSet<>(set)) {
+                Location loc = nm.toLocation(key);
+                if (loc != null && loc.getWorld() == p.getWorld()) {
+                    p.sendBlockChange(loc, loc.getBlock().getBlockData());
+                }
+            }
         }
+        shown.clear();
+        if (task != null) {
+            task.cancel();
+            task = null;
+        }
+    }
+
+    private void tick() {
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            World w = p.getWorld();
+            int cx = p.getLocation().getBlockX() >> 4;
+            int cz = p.getLocation().getBlockZ() >> 4;
+
+            // узлы рядом, по чанкам
+            List<Location> nodes = nm.getNodesAroundChunks(w, cx, cz, radiusChunks);
+            Set<String> newVisible = new HashSet<>();
+            for (Location loc : nodes) {
+                newVisible.add(NodeManager.key(loc));
+            }
+
+            Set<String> wasShown = shown.computeIfAbsent(p.getUniqueId(), id -> new HashSet<>());
+
+            // Новые видимые узлы — показать фейковый блок
+            for (String key : newVisible) {
+                if (!wasShown.contains(key)) {
+                    Location loc = nm.toLocation(key);
+                    if (loc == null || loc.getWorld() != w) continue;
+                    // Покажем клиенту "другой" блок, реальный не меняется
+                    p.sendBlockChange(loc, fakeData);
+                    wasShown.add(key);
+                }
+            }
+
+            // Узлы, которые больше не видимы/удалены — вернуть реальный блок
+            Iterator<String> it = wasShown.iterator();
+            while (it.hasNext()) {
+                String key = it.next();
+                if (!newVisible.contains(key) || !stillNodeInWorld(key, w)) {
+                    Location loc = nm.toLocation(key);
+                    if (loc != null && loc.getWorld() == w) {
+                        p.sendBlockChange(loc, loc.getBlock().getBlockData());
+                    }
+                    it.remove();
+                }
+            }
+        }
+    }
+
+    private boolean stillNodeInWorld(String key, World w) {
+        Location loc = nm.toLocation(key);
+        if (loc == null || loc.getWorld() != w) return false;
+        return nm.isNode(loc);
     }
 }
