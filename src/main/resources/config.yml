@@ -2,15 +2,31 @@ enabled-worlds:
   - world
 
 generation:
-  # Сколько нижних слоёв участвуют (от minY вверх)
-  layers-from-bottom: 7
+  # Вертикальный диапазон генерации (по умолчанию весь мир)
+  y-min: auto
+  y-max: auto
 
-  # Плотность генерации
+  # Размер кластера (в блоках)
+  cluster:
+    size-min: 1
+    size-max: 3
+    min-spacing: 5  # минимум 5 блоков между кластерами по горизонтали
+
+  # Плотность/цели по чанку — теперь считаем по КЛАСТЕРАМ
   chance-per-block: 0.008
   density-multiplier: 1.0
+  target-per-chunk: 12      # целевые КЛАСТЕРЫ на чанк
+  max-per-chunk: 24         # максимум КЛАСТЕРОВ на чанк
+  fill-attempts-per-node: 25
 
-  # Минимальная дистанция между узлами (в блоках)
-  min-spacing: 4
+    # Очередь «ленивой» генерации — чтобы не вешать тики на загрузке чанков
+  queue:
+    enabled: true
+    chunks-per-tick: 2
+    positions-per-tick: 280
+    fill-attempts-per-tick: 150
+
+fortune-enabled: true
 
   # Целевое/максимальное число узлов на чанк и «добор» попытками
   target-per-chunk: 12
@@ -20,15 +36,6 @@ generation:
   # Диапазон "ударов" до исчерпания
   min-hits: 15
   max-hits: 25
-
-  # Очередь «ленивой» генерации — чтобы не вешать тики на загрузке чанков
-  queue:
-    enabled: true
-    chunks-per-tick: 2
-    positions-per-tick: 280
-    fill-attempts-per-tick: 150
-
-fortune-enabled: true
 
 # Веса руд
 ore-weights:
