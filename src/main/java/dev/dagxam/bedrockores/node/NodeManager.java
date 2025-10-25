@@ -22,6 +22,8 @@ public class NodeManager {
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
     // Очередь респаунов
     private final Map<String, RespawnData> respawns = new HashMap<>();
+    // Индекс узлов по чанкам: WorldUUID -> (chunkKey -> список позиций)
+    private final Map<UUID, Map<Long, List<Location>>> nodesByChunk = new HashMap<>();
 
     private final File dataFile;
 
@@ -38,17 +40,26 @@ public class NodeManager {
         return (((long) cx) << 32) ^ (cz & 0xffffffffL);
     }
 
-    public boolean isNode(Location loc) { return nodes.containsKey(key(loc)); }
-    public NodeData getNode(Location loc) { return nodes.get(key(loc)); }
+    public boolean isNode(Location loc) {
+        return nodes.containsKey(key(loc));
+    }
+
+    public NodeData getNode(Location loc) {
+        return nodes.get(key(loc));
+    }
 
     public void addNode(Location loc, Material oreMaterial, int hits) {
         int max = hits;
         NodeData nd = new NodeData(oreMaterial, hits, max);
         nodes.put(key(loc), nd);
         loc.getBlock().setType(oreMaterial, false);
+        indexAdd(loc);
     }
 
-    public void removeNode(Location loc) { nodes.remove(key(loc)); }
+    public void removeNode(Location loc) {
+        nodes.remove(key(loc));
+        indexRemove(loc);
+    }
 
     public void markChunkProcessed(World world, int cx, int cz) {
         processedChunks.computeIfAbsent(world.getUID(), k -> new HashSet<>()).add(chunkKey(cx, cz));
@@ -80,9 +91,11 @@ public class NodeManager {
                 int y = Integer.parseInt(p[2]);
                 Location loc = new Location(chunk.getWorld(), x, y, z);
                 if (loc.getBlock().getType() != Material.BEDROCK) {
+                    // Мягкая очистка: возвращаем камень (или оставляем как есть по желанию)
                     loc.getBlock().setType(Material.DEEPSLATE, false);
                 }
                 it.remove();
+                indexRemove(loc);
                 count++;
             }
         }
@@ -118,14 +131,13 @@ public class NodeManager {
         long delaySec = plugin.getConfig().getLong("respawn.delay-seconds", 3600L);
         long due = System.currentTimeMillis() + delaySec * 1000L;
         respawns.put(key(loc), new RespawnData(oreType, due));
-        save(); // чтобы пережило рестарт
+        save();
     }
 
-    // Проверяем, кому пора возродиться (только для загруженных чанков!)
+    // Периодический тик: возрождаем только в загруженных чанках
     public void tickRespawns() {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
-
         List<String> done = new ArrayList<>();
         for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
             RespawnData rd = e.getValue();
@@ -135,21 +147,16 @@ public class NodeManager {
             if (loc == null) { done.add(e.getKey()); continue; }
             World w = loc.getWorld();
             if (w == null) { done.add(e.getKey()); continue; }
+            if (!loc.getChunk().isLoaded()) continue;
 
-            // Не форсим загрузку чанка! Ждем, пока он будет загружен
-            if (!loc.getChunk().isLoaded()) {
-                continue;
-            }
-
-            int hits = randomHits();
-            addNode(loc, rd.oreMaterial, hits);
+            addNode(loc, rd.oreMaterial, randomHits());
             done.add(e.getKey());
         }
         for (String k : done) respawns.remove(k);
         if (!done.isEmpty()) save();
     }
 
-    // Вызывается при загрузке чанка — возрождаем все просроченные узлы в этом чанке
+    // При загрузке чанка: если есть просроченные респавны в этом чанке — возрождаем
     public void processDueRespawnsInChunk(Chunk chunk) {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
@@ -165,13 +172,13 @@ public class NodeManager {
             if (!w.equals(wid)) continue;
 
             int x = Integer.parseInt(p[1]);
-            int y = Integer.parseInt(p[2]);
             int z = Integer.parseInt(p[3]);
             if ((x >> 4) != cx || (z >> 4) != cz) continue;
 
             RespawnData rd = e.getValue();
             if (rd.dueAtMillis > now) continue;
 
+            int y = Integer.parseInt(p[2]);
             Location loc = new Location(chunk.getWorld(), x, y, z);
             addNode(loc, rd.oreMaterial, randomHits());
             done.add(e.getKey());
@@ -270,7 +277,8 @@ public class NodeManager {
             }
         }
 
-        plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processedChunks worlds=" + processedChunks.size());
+        rebuildIndex();
+        plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processed worlds=" + processedChunks.size());
     }
 
     public void save() {
@@ -318,11 +326,11 @@ public class NodeManager {
             RespawnData rd = e.getValue();
             String path = "respawns." + id;
             yml.set(path + ".world", world.toString());
-            yml.set(path + ".x", x);
-            yml.set(path + ".y", y);
-            yml.set(path + ".z", z);
-            yml.set(path + ".type", rd.oreMaterial.name());
-            yml.set(path + ".dueAt", rd.dueAtMillis);
+            yml.set(path . ".x", x);
+            yml.set(path . ".y", y);
+            yml.set(path . ".z", z);
+            yml.set(path . ".type", rd.oreMaterial.name());
+            yml.set(path . ".dueAt", rd.dueAtMillis);
         }
 
         try {
@@ -338,5 +346,66 @@ public class NodeManager {
         if (min < 1) min = 1;
         if (max < min) max = min;
         return min + new Random().nextInt(max - min + 1);
+    }
+
+    // --- Индексация узлов по чанкам ---
+
+    private void indexAdd(Location loc) {
+        Map<Long, List<Location>> map = nodesByChunk.computeIfAbsent(loc.getWorld().getUID(), k -> new HashMap<>());
+        long ck = chunkKey(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
+        List<Location> list = map.computeIfAbsent(ck, k -> new ArrayList<>());
+        list.add(loc.clone());
+    }
+
+    private void indexRemove(Location loc) {
+        Map<Long, List<Location>> map = nodesByChunk.get(loc.getWorld().getUID());
+        if (map == null) return;
+        long ck = chunkKey(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
+        List<Location> list = map.get(ck);
+        if (list == null) return;
+        list.removeIf(l -> l.getBlockX() == loc.getBlockX() && l.getBlockY() == loc.getBlockY() && l.getBlockZ() == loc.getBlockZ());
+        if (list.isEmpty()) map.remove(ck);
+    }
+
+    private void rebuildIndex() {
+        nodesByChunk.clear();
+        for (String k : nodes.keySet()) {
+            Location loc = toLocation(k);
+            if (loc != null && loc.getWorld() != null) indexAdd(loc);
+        }
+    }
+
+    public Set<String> nodeKeysSnapshot() {
+        return new HashSet<>(nodes.keySet());
+    }
+
+    public Location toLocation(String k) {
+        try {
+            String[] parts = k.split(":");
+            UUID world = UUID.fromString(parts[0]);
+            int x = Integer.parseInt(parts[1]);
+            int y = Integer.parseInt(parts[2]);
+            int z = Integer.parseInt(parts[3]);
+            World w = Bukkit.getWorld(world);
+            if (w == null) return null;
+            return new Location(w, x, y, z);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // Узлы вокруг чанков (для визуализации)
+    public List<Location> getNodesAroundChunks(World w, int cx, int cz, int radius) {
+        Map<Long, List<Location>> map = nodesByChunk.get(w.getUID());
+        List<Location> out = new ArrayList<>();
+        if (map == null) return out;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                long ck = chunkKey(cx + dx, cz + dz);
+                List<Location> list = map.get(ck);
+                if (list != null) out.addAll(list);
+            }
+        }
+        return out;
     }
 }
