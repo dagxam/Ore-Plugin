@@ -65,30 +65,36 @@ public class GenerationListener implements Listener {
     }
 
     private void startQueue() {
-        boolean enabled = plugin.getConfig().getBoolean("generation.queue.enabled", true);
-        if (!enabled) return;
-        if (queueTask != null) queueTask.cancel();
-        queueTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
-            if (queue.isEmpty()) return;
-            int chunksPerTick = Math.max(1, plugin.getConfig().getInt("generation.queue.chunks-per-tick", 2));
-            int posPerTick = Math.max(50, plugin.getConfig().getInt("generation.queue.positions-per-tick", 280));
-            int fillPerTick = Math.max(25, plugin.getConfig().getInt("generation.queue.fill-attempts-per-tick", 150));
+    boolean enabled = plugin.getConfig().getBoolean("generation.queue.enabled", true);
+    if (!enabled) return;
+    if (queueTask != null) queueTask.cancel();
 
-            int processed = 0;
-            Iterator<GenTask> it = queue.iterator();
-            while (it.hasNext() && processed < chunksPerTick) {
-                GenTask t = it.next();
-                if (!t.isValid()) { it.remove(); continue; }
-                boolean done = t.step(posPerTick, fillPerTick);
-                if (done) {
-                    nodeManager.markChunkProcessed(t.getWorld(), t.getCx(), t.getCz());
-                    it.remove();
-                }
-                processed++;
+    queueTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+        if (queue.isEmpty()) return;
+
+        int chunksPerTick = Math.max(1, plugin.getConfig().getInt("generation.queue.chunks-per-tick", 2));
+        int posPerTick    = Math.max(50, plugin.getConfig().getInt("generation.queue.positions-per-tick", 280));
+        int fillPerTick   = Math.max(25, plugin.getConfig().getInt("generation.queue.fill-attempts-per-tick", 150));
+
+        for (int processed = 0; processed < chunksPerTick; processed++) {
+            GenTask t = queue.pollFirst(); // забираем голову очереди
+            if (t == null) break;
+
+            if (!t.isValid()) {
+                // пропускаем битую задачу
+                continue;
             }
-        }, 1L, 1L);
-    }
 
+            boolean done = t.step(posPerTick, fillPerTick);
+            if (done) {
+                nodeManager.markChunkProcessed(t.getWorld(), t.getCx(), t.getCz());
+            } else {
+                // возвращаем в хвост на продолжение в следующий тик
+                queue.addLast(t);
+            }
+        }
+    }, 1L, 1L);
+}
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent e) {
         World world = e.getWorld();
