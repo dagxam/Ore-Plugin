@@ -7,16 +7,14 @@ import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
-import org.bukkit.Scoreboard;
 import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 import org.bukkit.util.Transformation;
 import org.joml.Vector3f;
-
-import java.util.Collection;
 
 public class VisualOverlay {
     private static final String TAG = "bo_overlay";
@@ -43,6 +41,7 @@ public class VisualOverlay {
         this.scale = (float) plugin.getConfig().getDouble("visual.overlay.scale", 1.02);
         this.glow = plugin.getConfig().getBoolean("visual.overlay.glow", true);
         this.teamColor = parseColor(plugin.getConfig().getString("visual.overlay.team-color", "AQUA"));
+
         int br = plugin.getConfig().getInt("visual.overlay.brightness", 15);
         if (br < 0) br = 0; if (br > 15) br = 15;
         this.brightness = br;
@@ -51,7 +50,6 @@ public class VisualOverlay {
     }
 
     public void syncAllFromNodes() {
-        // для всех узлов — гарантируем наличие оверлея (только для загруженных чанков)
         for (String key : nodeManager.nodeKeysSnapshot()) {
             Location loc = nodeManager.toLocation(key);
             if (loc == null) continue;
@@ -70,11 +68,12 @@ public class VisualOverlay {
     }
 
     public void cleanup() {
-        // Удаляем все наши оверлеи (с тегом) во всех мирах
         for (World w : plugin.getServer().getWorlds()) {
-            w.getEntitiesByClass(BlockDisplay.class).stream()
-                .filter(e -> e.getScoreboardTags().contains(TAG))
-                .forEach(Entity::remove);
+            for (Entity e : w.getEntities()) {
+                if (e instanceof BlockDisplay && e.getScoreboardTags().contains(TAG)) {
+                    e.remove();
+                }
+            }
         }
     }
 
@@ -82,13 +81,10 @@ public class VisualOverlay {
         World w = loc.getWorld();
         if (w == null) return;
 
-        boolean exists = w.getNearbyEntitiesByClass(BlockDisplay.class, loc, 0.6, e ->
-                e.getScoreboardTags().contains(TAG) && sameBlock(e.getLocation(), loc)).findAny().isPresent();
-        if (exists) return;
+        if (hasOverlayAt(loc)) return;
 
-        // Спавним оверлей
         Location at = loc.clone().add(0.5, 0.5, 0.5);
-        BlockDisplay disp = w.spawn(at, BlockDisplay.class, d -> {
+        w.spawn(at, BlockDisplay.class, d -> {
             d.addScoreboardTag(TAG);
             d.setPersistent(true);
             d.setInvulnerable(true);
@@ -109,12 +105,29 @@ public class VisualOverlay {
         });
     }
 
+    private boolean hasOverlayAt(Location loc) {
+        World w = loc.getWorld();
+        if (w == null) return false;
+        for (Entity e : w.getNearbyEntities(loc, 0.6, 0.6, 0.6)) {
+            if (e instanceof BlockDisplay bd) {
+                if (bd.getScoreboardTags().contains(TAG) && sameBlock(bd.getLocation(), loc)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private void removeOverlay(Location loc) {
         World w = loc.getWorld();
         if (w == null) return;
-        Collection<BlockDisplay> list = w.getNearbyEntitiesByClass(BlockDisplay.class, loc, 0.6, e ->
-                e.getScoreboardTags().contains(TAG) && sameBlock(e.getLocation(), loc)).toList();
-        for (BlockDisplay bd : list) bd.remove();
+        for (Entity e : w.getNearbyEntities(loc, 0.6, 0.6, 0.6)) {
+            if (e instanceof BlockDisplay bd) {
+                if (bd.getScoreboardTags().contains(TAG) && sameBlock(bd.getLocation(), loc)) {
+                    bd.remove();
+                }
+            }
+        }
     }
 
     private boolean sameBlock(Location a, Location b) {
@@ -135,20 +148,4 @@ public class VisualOverlay {
         }
     }
 
-    private void addToTeam(Entity e, String team, ChatColor color) {
-        try {
-            Scoreboard sb = Bukkit.getScoreboardManager().getMainScoreboard();
-            Team t = sb.getTeam(team);
-            if (t == null) {
-                t = sb.registerNewTeam(team);
-                t.setColor(color);
-            }
-            t.addEntry(e.getUniqueId().toString());
-        } catch (Exception ignored) {}
-    }
-
-    private ChatColor parseColor(String name) {
-        try { return ChatColor.valueOf(name.toUpperCase()); }
-        catch (Exception e) { return ChatColor.AQUA; }
-    }
-}
+    private void addToTeam(Entity e, String team, 
