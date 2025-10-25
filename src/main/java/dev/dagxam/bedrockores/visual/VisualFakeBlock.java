@@ -1,55 +1,71 @@
-package dev.dagxam.bedrockores.visual;
+import dev.dagxam.bedrockores.visual.VisualFakeBlock;
+// ...
 
-import dev.dagxam.bedrockores.node.NodeManager;
-import org.bukkit.Bukkit;
-import org.bukkit.Location;
-import org.bukkit.Material;
-import org.bukkit.World;
-import org.bukkit.block.data.BlockData;
-import org.bukkit.entity.Player;
-import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
+public class BedrockOresPlugin extends JavaPlugin {
 
-import java.util.*;
+    private NodeManager nodeManager;
+    private GenerationListener generationListener;
 
-public class VisualFakeBlock {
+    // визуальные режимы
+    private VisualOverlay visualOverlay;      // если используешь overlay
+    private VisualParticles visualParticles;  // если используешь particles
+    private VisualFakeBlock visualFakeBlock;  // НОВОЕ
 
-    private final Plugin plugin;
-    private final NodeManager nm;
+    @Override
+    public void onEnable() {
+        saveDefaultConfig();
 
-    private final Material fakeMaterial;
-    private final BlockData fakeData;
-    private final int periodTicks;
-    private final int radiusChunks;
+        this.nodeManager = new NodeManager(this);
+        nodeManager.load();
 
-    // какие узлы уже "перекрашены" для каждого игрока: playerUUID -> set(nodeKey)
-    private final Map<UUID, Set<String>> shown = new HashMap<>();
-    private BukkitTask task;
+        String visMode = getConfig().getString("visual.mode", "none").toLowerCase();
 
-    public VisualFakeBlock(Plugin plugin, NodeManager nm) {
-        this.plugin = plugin;
-        this.nm = nm;
+        switch (visMode) {
+            case "overlay": {
+                visualOverlay = new VisualOverlay(this, nodeManager);
+                nodeManager.setOverlay(visualOverlay);
+                Bukkit.getScheduler().runTask(this, visualOverlay::syncAllFromNodes);
+                break;
+            }
+            case "particles": {
+                visualParticles = new VisualParticles(this, nodeManager);
+                visualParticles.start();
+                break;
+            }
+            case "fakeblock": {
+                visualFakeBlock = new VisualFakeBlock(this, nodeManager);
+                visualFakeBlock.start();
+                break;
+            }
+            default:
+                // none
+        }
 
-        String matName = plugin.getConfig().getString("visual.fakeblock.material", "LIGHT_BLUE_STAINED_GLASS");
-        Material mat;
-        try { mat = Material.valueOf(matName); } catch (Exception e) { mat = Material.LIGHT_BLUE_STAINED_GLASS; }
-        this.fakeMaterial = mat;
-        this.fakeData = fakeMaterial.createBlockData();
+        this.generationListener = new GenerationListener(this, nodeManager);
+        Bukkit.getPluginManager().registerEvents(generationListener, this);
+        Bukkit.getPluginManager().registerEvents(new OreListeners(this, nodeManager), this);
 
-        this.periodTicks = Math.max(5, plugin.getConfig().getInt("visual.fakeblock.period-ticks", 20));
-        this.radiusChunks = Math.max(1, plugin.getConfig().getInt("visual.fakeblock.radius-chunks", 3));
+        Bukkit.getScheduler().runTaskTimer(this, nodeManager::save, 20L * 60L, 20L * 60L);
+        Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
+
+        BedrockOresCommand cmd = new BedrockOresCommand(this, nodeManager, generationListener);
+        if (getCommand("bedrockores") != null) {
+            getCommand("bedrockores").setExecutor(cmd);
+            getCommand("bedrockores").setTabCompleter(cmd);
+        }
+
+        getLogger().info("BedrockOres enabled.");
     }
 
-    public void start() {
-        stop();
-        task = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, periodTicks, periodTicks);
+    @Override
+    public void onDisable() {
+        try {
+            if (visualFakeBlock != null) visualFakeBlock.stop();
+            if (visualParticles != null) visualParticles.stop();
+            if (visualOverlay != null) visualOverlay.cleanup();
+            nodeManager.save();
+        } catch (Exception e) {
+            getLogger().severe("Failed to save nodes: " + e.getMessage());
+        }
     }
-
-    public void stop() {
-        // Вернём всем игрокам реальные блоки вместо фейковых
-        for (Player p : Bukkit.getOnlinePlayers()) {
-            Set<String> set = shown.get(p.getUniqueId());
-            if (set == null) continue;
-            for (String key : new HashSet<>(set)) {
-                Location loc = nm.toLocation(key);
-                if (loc != null && loc.getWorld() == p.getWorld()) {
+}
