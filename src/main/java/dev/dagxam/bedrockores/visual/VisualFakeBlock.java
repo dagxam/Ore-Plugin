@@ -14,6 +14,10 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
 
+/**
+ * Показывает игрокам фейковый блок поверх "узла" руды (client-side),
+ * не меняя реальный блок на сервере. Поддерживает маппинг руда -> стекло.
+ */
 public class VisualFakeBlock {
 
     private final Plugin plugin;
@@ -34,17 +38,19 @@ public class VisualFakeBlock {
 
         ConfigurationSection fb = plugin.getConfig().getConfigurationSection("visual.fakeblock");
 
-        // default материал
+        // Материал по умолчанию
         String defaultName = "LIGHT_BLUE_STAINED_GLASS";
         if (fb != null) defaultName = fb.getString("default", defaultName);
         Material defMat;
-        try { defMat = Material.valueOf(defaultName); } catch (Exception e) {
+        try {
+            defMat = Material.valueOf(defaultName);
+        } catch (Exception e) {
             plugin.getLogger().warning("Bad visual.fakeblock.default: " + defaultName + " — fallback LIGHT_BLUE_STAINED_GLASS");
             defMat = Material.LIGHT_BLUE_STAINED_GLASS;
         }
         this.defaultFakeData = defMat.createBlockData();
 
-        // карта руда -> стекло
+        // Карта: руда -> стекло
         if (fb != null) {
             ConfigurationSection map = fb.getConfigurationSection("map");
             if (map != null) {
@@ -95,17 +101,55 @@ public class VisualFakeBlock {
             int cx = p.getLocation().getBlockX() >> 4;
             int cz = p.getLocation().getBlockZ() >> 4;
 
-            // узлы рядом, по чанкам
+            // Узлы рядом, по чанкам
             List<Location> nodes = nm.getNodesAroundChunks(w, cx, cz, radiusChunks);
+
+            // Список "новых видимых" узлов
             Set<String> newVisible = new HashSet<>();
             for (Location loc : nodes) {
                 newVisible.add(NodeManager.key(loc));
             }
 
+            // Какие уже были показаны игроку (перекрашены)
             Set<String> wasShown = shown.computeIfAbsent(p.getUniqueId(), id -> new HashSet<>());
 
-            // Новые видимые узлы — показать фейковый блок (по карте цветов)
+            // Показать новые
             for (String key : newVisible) {
                 if (!wasShown.contains(key)) {
                     Location loc = nm.toLocation(key);
-                    if (loc == null || 
+                    if (loc == null || loc.getWorld() != w) continue;
+                    p.sendBlockChange(loc, fakeDataFor(loc));
+                    wasShown.add(key);
+                }
+            }
+
+            // Скрыть ушедшие/удалённые
+            Iterator<String> it = wasShown.iterator();
+            while (it.hasNext()) {
+                String key = it.next();
+                if (!newVisible.contains(key) || !stillNodeInWorld(key, w)) {
+                    Location loc = nm.toLocation(key);
+                    if (loc != null && loc.getWorld() == w) {
+                        p.sendBlockChange(loc, loc.getBlock().getBlockData());
+                    }
+                    it.remove();
+                }
+            }
+        }
+    }
+
+    private BlockData fakeDataFor(Location loc) {
+        NodeData nd = nm.getNode(loc);
+        if (nd != null) {
+            BlockData bd = perOreData.get(nd.oreMaterial);
+            if (bd != null) return bd;
+        }
+        return defaultFakeData;
+    }
+
+    private boolean stillNodeInWorld(String key, World w) {
+        Location loc = nm.toLocation(key);
+        if (loc == null || loc.getWorld() != w) return false;
+        return nm.isNode(loc);
+    }
+}
