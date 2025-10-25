@@ -2,8 +2,6 @@ package dev.dagxam.bedrockores.visual;
 
 import dev.dagxam.bedrockores.node.NodeData;
 import dev.dagxam.bedrockores.node.NodeManager;
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -11,14 +9,11 @@ import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.Entity;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scoreboard.Scoreboard;
-import org.bukkit.scoreboard.Team;
 import org.bukkit.util.Transformation;
 import org.joml.Vector3f;
 
 public class VisualOverlay {
     private static final String TAG = "bo_overlay";
-    private static final String TEAM = "bedrockores_overlay";
 
     private final Plugin plugin;
     private final NodeManager nodeManager;
@@ -26,7 +21,6 @@ public class VisualOverlay {
     private final Material overlayMat;
     private final float scale;
     private final boolean glow;
-    private final ChatColor teamColor;
     private final int brightness; // 0..15
 
     public VisualOverlay(Plugin plugin, NodeManager nodeManager) {
@@ -40,15 +34,14 @@ public class VisualOverlay {
 
         this.scale = (float) plugin.getConfig().getDouble("visual.overlay.scale", 1.02);
         this.glow = plugin.getConfig().getBoolean("visual.overlay.glow", true);
-        this.teamColor = parseColor(plugin.getConfig().getString("visual.overlay.team-color", "AQUA"));
 
         int br = plugin.getConfig().getInt("visual.overlay.brightness", 15);
-        if (br < 0) br = 0; if (br > 15) br = 15;
+        if (br < 0) br = 0;
+        if (br > 15) br = 15;
         this.brightness = br;
-
-        ensureTeam();
     }
 
+    // Вызвать один раз после загрузки узлов (в onEnable)
     public void syncAllFromNodes() {
         for (String key : nodeManager.nodeKeysSnapshot()) {
             Location loc = nodeManager.toLocation(key);
@@ -68,6 +61,7 @@ public class VisualOverlay {
     }
 
     public void cleanup() {
+        // Удаляем все наши оверлеи (по тегу) во всех загруженных мирах
         for (World w : plugin.getServer().getWorlds()) {
             for (Entity e : w.getEntities()) {
                 if (e instanceof BlockDisplay && e.getScoreboardTags().contains(TAG)) {
@@ -80,7 +74,6 @@ public class VisualOverlay {
     private void spawnOverlayIfMissing(Location loc) {
         World w = loc.getWorld();
         if (w == null) return;
-
         if (hasOverlayAt(loc)) return;
 
         Location at = loc.clone().add(0.5, 0.5, 0.5);
@@ -89,10 +82,7 @@ public class VisualOverlay {
             d.setPersistent(true);
             d.setInvulnerable(true);
             d.setBlock(overlayMat.createBlockData());
-            if (glow) {
-                d.setGlowing(true);
-                addToTeam(d, TEAM, teamColor);
-            }
+            if (glow) d.setGlowing(true);
             try {
                 d.setBrightness(new Display.Brightness(brightness, brightness));
             } catch (Throwable ignored) {}
@@ -136,16 +126,4 @@ public class VisualOverlay {
             && a.getBlockY() == b.getBlockY()
             && a.getBlockZ() == b.getBlockZ();
     }
-
-    private void ensureTeam() {
-        try {
-            Scoreboard sb = Bukkit.getScoreboardManager().getMainScoreboard();
-            Team t = sb.getTeam(TEAM);
-            if (t == null) t = sb.registerNewTeam(TEAM);
-            t.setColor(teamColor);
-        } catch (Exception e) {
-            plugin.getLogger().warning("Failed to create overlay team: " + e.getMessage());
-        }
-    }
-
-    private void addToTeam(Entity e, String team, 
+}
