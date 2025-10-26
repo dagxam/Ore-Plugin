@@ -3,13 +3,13 @@ enabled-worlds:
   - world_nether
 
 visual:
-  mode: none
+  mode: none                 # overlay/particles/fakeblock не используем
   server-solid:
-    enabled: true
-    map:
+    enabled: true            # показывать узлы как «цельные» блоки на сервере
+    map:                     # соответствие: исходная руда -> какой блок ставить
       DEEPSLATE_DIAMOND_ORE: DIAMOND_BLOCK
       DEEPSLATE_EMERALD_ORE: EMERALD_BLOCK
-      DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK
+      DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK     # если не нужен сигнал — замените, напр., на RED_NETHER_BRICKS
       DEEPSLATE_LAPIS_ORE:   LAPIS_BLOCK
       DEEPSLATE_GOLD_ORE:    GOLD_BLOCK
       DEEPSLATE_IRON_ORE:    IRON_BLOCK
@@ -18,34 +18,39 @@ visual:
       ANCIENT_DEBRIS:        NETHERITE_BLOCK
 
 generation:
-  # Если нужно — задайте диапазон высот:
+  # Если нужно — можно ограничить высоты (иначе весь высотный диапазон мира):
   # y-min: -64
   # y-max: 320
 
-  chance-per-block: 0.012
-  density-multiplier: 1.3
+  # Плотность генерации (делает «чаще/реже»)
+  chance-per-block: 0.022       # базовый шанс на кандидат-блок
+  density-multiplier: 2.3       # множитель к шансу
 
+  # Кластеры узлов
   cluster:
-    size-min: 1
-    size-max: 3
-    min-spacing: 5
+    size-min: 5                 # узел занимает 1–3 соседних блока
+    size-max: 8
+    min-spacing: 10              # мин. дистанция между кластерами по X/Z (в блоках)
 
-  target-per-chunk: 18
-  max-per-chunk: 30
-  fill-attempts-per-node: 25
+  # Сколько кластеров хотим на чанк
+  target-per-chunk: 18          # целевое количество
+  max-per-chunk: 30             # жёсткий максимум
+  fill-attempts-per-node: 25    # попыток добора на каждый недостающий кластер
 
+  # Сколько «ударов» нужно до исчерпания (каждый удар даёт лут)
   min-hits: 25
   max-hits: 100
 
+  # Очередь ленивой генерации (борьба с лагами при загрузке чанков)
   queue:
     enabled: true
     chunks-per-tick: 2
     positions-per-tick: 300
     fill-attempts-per-tick: 180
 
-fortune-enabled: true
+fortune-enabled: true           # учитывать Fortune (упрощённая модель)
 
-# Общие веса (если хотите — можно разнести по мирам ниже)
+# Частота типов руд (чем больше вес — тем чаще)
 ore-weights:
   DEEPSLATE_REDSTONE_ORE: 8
   DEEPSLATE_IRON_ORE: 6
@@ -55,29 +60,24 @@ ore-weights:
   DEEPSLATE_LAPIS_ORE: 3
   DEEPSLATE_DIAMOND_ORE: 1
   DEEPSLATE_EMERALD_ORE: 1
-  ANCIENT_DEBRIS: 1
+  ANCIENT_DEBRIS: 1            # древние обломки (в аду)
 
-# (опционально) Разные веса по мирам:
+# (опционально) если хотите разные веса по мирам — раскомментируйте и настройте:
 # ore-weights-overworld:
 #   DEEPSLATE_REDSTONE_ORE: 8
 #   DEEPSLATE_IRON_ORE: 6
-#   DEEPSLATE_GOLD_ORE: 3
-#   DEEPSLATE_COPPER_ORE: 4
-#   DEEPSLATE_COAL_ORE: 4
-#   DEEPSLATE_LAPIS_ORE: 3
-#   DEEPSLATE_DIAMOND_ORE: 1
-#   DEEPSLATE_EMERALD_ORE: 1
+#   ...
 # ore-weights-nether:
 #   ANCIENT_DEBRIS: 2
-#   DEEPSLATE_GOLD_ORE: 1   # если хотите «золотые» узлы и в аду
+#   DEEPSLATE_GOLD_ORE: 1
 
 respawn:
   enabled: true
-  delay-seconds: 3600
+  delay-seconds: 3600           # через сколько секунд узел возродится
 
 performance:
   direct-item-to-inventory: true
-  xp-mode: direct
-  hold-hit-interval-ticks: 5
+  xp-mode: direct               # direct = сразу игроку; orb = орбами
+  hold-hit-interval-ticks: 5    # если вернёте «удары при удержании» — скорость
   hold-timeout-ms: 400
   max-hold-hits-per-tick: 60
