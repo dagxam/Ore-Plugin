@@ -32,20 +32,22 @@ generation:
     team-color: AQUA    # цвет свечения (цвет команды скорборда)
     brightness: 15      # 0..15 (если API доступно)
 
-    visual:
-  mode: none           # overlay/particles/fakeblock не используются
+    enabled-worlds:
+  - world
+
+visual:
+  mode: none
   server-solid:
     enabled: true
-    # Необязательная кастомная карта: руда -> какой блок показать физически
-    # Имена — из org.bukkit.Material
     map:
       DEEPSLATE_DIAMOND_ORE: DIAMOND_BLOCK
       DEEPSLATE_EMERALD_ORE: EMERALD_BLOCK
-      DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK
+      DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK   # если не нужен сигнал, замени на RED_NETHER_BRICKS/NETHER_WART_BLOCK и т.п.
       DEEPSLATE_LAPIS_ORE: LAPIS_BLOCK
       DEEPSLATE_GOLD_ORE: GOLD_BLOCK
       DEEPSLATE_IRON_ORE: IRON_BLOCK
       DEEPSLATE_COAL_ORE: COAL_BLOCK
+      DEEPSLATE_COPPER_ORE: COPPER_BLOCK
       DEEPSLATE_COPPER_ORE: COPPER_BLOCK
     
   # Кластеры (1–3 блока), минимальная дистанция между кластерами (по X/Z)
