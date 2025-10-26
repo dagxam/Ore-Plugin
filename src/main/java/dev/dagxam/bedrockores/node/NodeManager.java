@@ -16,13 +16,13 @@ import java.util.*;
 public class NodeManager {
     private final Plugin plugin;
 
-    // Активные узлы: key(worldUUID:x:y:z) -> данные узла (типа исходной руды)
+    // Активные узлы: key(worldUUID:x:y:z) -> NodeData (исходная руда + прогресс)
     private final Map<String, NodeData> nodes = new HashMap<>();
-    // Обработанные чанки
+    // Обработанные чанки (для одноразовой генерации)
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
     // Очередь респаунов
     private final Map<String, RespawnData> respawns = new HashMap<>();
-    // Индекс узлов по чанкам для быстрых запросов (визуализация и пр.)
+    // Индекс узлов по чанкам (для быстрых выборок)
     private final Map<UUID, Map<Long, List<Location>>> nodesByChunk = new HashMap<>();
 
     private final File dataFile;
@@ -48,12 +48,12 @@ public class NodeManager {
         return nodes.get(key(loc));
     }
 
+    // Добавить узел на блок (физически ставим отображаемый блок согласно режиму)
     public void addNode(Location loc, Material oreMaterial, int hits) {
         int max = hits;
         NodeData nd = new NodeData(oreMaterial, hits, max);
         nodes.put(key(loc), nd);
 
-        // Что ставим физически
         Material toPlace = oreMaterial;
         if (serverSolidEnabled()) {
             Material disp = displayFor(oreMaterial);
@@ -64,6 +64,7 @@ public class NodeManager {
         indexAdd(loc);
     }
 
+    // Удалить узел (блок на месте узла не меняем — логика замены отдельно)
     public void removeNode(Location loc) {
         nodes.remove(key(loc));
         indexRemove(loc);
@@ -77,9 +78,15 @@ public class NodeManager {
         return processedChunks.getOrDefault(world.getUID(), Collections.emptySet()).contains(chunkKey(cx, cz));
     }
 
-    public void clearProcessedFlags(World world) { processedChunks.remove(world.getUID()); }
-    public void clearAllProcessedFlags() { processedChunks.clear(); }
+    public void clearProcessedFlags(World world) {
+        processedChunks.remove(world.getUID());
+    }
 
+    public void clearAllProcessedFlags() {
+        processedChunks.clear();
+    }
+
+    // Удалить все узлы в чанке (для перегенерации)
     public int removeNodesInChunk(Chunk chunk) {
         UUID wid = chunk.getWorld().getUID();
         int cx = chunk.getX();
@@ -109,6 +116,7 @@ public class NodeManager {
         return count;
     }
 
+    // Удалить все отложенные респавны в чанке
     public int removeRespawnsInChunk(Chunk chunk) {
         UUID wid = chunk.getWorld().getUID();
         int cx = chunk.getX();
@@ -134,6 +142,7 @@ public class NodeManager {
         return count;
     }
 
+    // Запланировать респаун узла через delay-seconds
     public void scheduleRespawn(Location loc, Material oreType) {
         if (!plugin.getConfig().getBoolean("respawn.enabled", true)) return;
         long delaySec = plugin.getConfig().getLong("respawn.delay-seconds", 3600L);
@@ -142,6 +151,7 @@ public class NodeManager {
         save();
     }
 
+    // Периодический тик респаунов: возрождаем только если чанк загружен
     public void tickRespawns() {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
@@ -165,6 +175,7 @@ public class NodeManager {
         if (!done.isEmpty()) save();
     }
 
+    // При загрузке чанка — если есть просроченные респавны в нём, возрождаем
     public void processDueRespawnsInChunk(Chunk chunk) {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
@@ -214,14 +225,18 @@ public class NodeManager {
         }
     }
 
+    // Загрузка узлов/флагов/респавнов из файла
     public void load() {
         if (!dataFile.exists()) return;
+
         YamlConfiguration yml = YamlConfiguration.loadConfiguration(dataFile);
 
+        // Узлы
         ConfigurationSection nodesSec = yml.getConfigurationSection("nodes");
         if (nodesSec != null) {
             for (String id : nodesSec.getKeys(false)) {
                 ConfigurationSection s = nodesSec.getConfigurationSection(id);
+                if (s == null) continue;
                 try {
                     UUID worldId = UUID.fromString(Objects.requireNonNull(s.getString("world")));
                     int x = s.getInt("x");
@@ -237,7 +252,7 @@ public class NodeManager {
                     Location loc = new Location(w, x, y, z);
                     nodes.put(key(loc), new NodeData(mat, hits, maxHits));
 
-                    // Восстановим физический вид блока
+                    // Восстановим отображение блока
                     Material toPlace = mat;
                     if (serverSolidEnabled()) {
                         Material disp = displayFor(mat);
@@ -252,6 +267,7 @@ public class NodeManager {
             }
         }
 
+        // Флаги обработанных чанков
         ConfigurationSection pcSec = yml.getConfigurationSection("processedChunks");
         if (pcSec != null) {
             for (String worldKey : pcSec.getKeys(false)) {
@@ -267,15 +283,17 @@ public class NodeManager {
                     }
                     processedChunks.put(worldId, set);
                 } catch (Exception ex) {
-                    plugin.getLogger().warning("Bad processedChunks entry for " + worldKey);
+                    plugin.getLogger().warning("Bad processedChunks entry: " + worldKey);
                 }
             }
         }
 
+        // Очередь респавнов
         ConfigurationSection respSec = yml.getConfigurationSection("respawns");
         if (respSec != null) {
             for (String id : respSec.getKeys(false)) {
                 ConfigurationSection s = respSec.getConfigurationSection(id);
+                if (s == null) continue;
                 try {
                     UUID worldId = UUID.fromString(Objects.requireNonNull(s.getString("world")));
                     int x = s.getInt("x");
@@ -299,6 +317,7 @@ public class NodeManager {
         plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processed worlds=" + processedChunks.size());
     }
 
+    // Сохранение узлов/флагов/респавнов
     public void save() {
         YamlConfiguration yml = new YamlConfiguration();
 
@@ -364,7 +383,7 @@ public class NodeManager {
         return min + new Random().nextInt(max - min + 1);
     }
 
-    // ===== Индексация (для визуализации/быстрого доступа) =====
+    // ===== Индексация по чанкам =====
 
     private void indexAdd(Location loc) {
         Map<Long, List<Location>> map = nodesByChunk.computeIfAbsent(loc.getWorld().getUID(), k -> new HashMap<>());
@@ -391,7 +410,9 @@ public class NodeManager {
         }
     }
 
-    public Set<String> nodeKeysSnapshot() { return new HashSet<>(nodes.keySet()); }
+    public Set<String> nodeKeysSnapshot() {
+        return new HashSet<>(nodes.keySet());
+    }
 
     public Location toLocation(String k) {
         try {
@@ -401,3 +422,58 @@ public class NodeManager {
             int y = Integer.parseInt(parts[2]);
             int z = Integer.parseInt(parts[3]);
             World w = Bukkit.getWorld(world);
+            if (w == null) return null;
+            return new Location(w, x, y, z);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public List<Location> getNodesAroundChunks(World w, int cx, int cz, int radius) {
+        Map<Long, List<Location>> map = nodesByChunk.get(w.getUID());
+        List<Location> out = new ArrayList<>();
+        if (map == null) return out;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                long ck = chunkKey(cx + dx, cz + dz);
+                List<Location> list = map.get(ck);
+                if (list != null) out.addAll(list);
+            }
+        }
+        return out;
+    }
+
+    // ===== Режим "цельные" серверные блоки =====
+
+    private boolean serverSolidEnabled() {
+        return plugin.getConfig().getBoolean("visual.server-solid.enabled", false);
+    }
+
+    private Material displayFor(Material ore) {
+        // 1) Переопределение из конфига
+        try {
+            ConfigurationSection map = plugin.getConfig().getConfigurationSection("visual.server-solid.map");
+            if (map != null) {
+                String name = map.getString(ore.name());
+                if (name != null && !name.isEmpty()) {
+                    try {
+                        return Material.valueOf(name);
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // 2) Дефолтная карта "руда -> цельный блок"
+        switch (ore) {
+            case DEEPSLATE_DIAMOND_ORE: return Material.DIAMOND_BLOCK;
+            case DEEPSLATE_EMERALD_ORE: return Material.EMERALD_BLOCK;
+            case DEEPSLATE_REDSTONE_ORE: return Material.REDSTONE_BLOCK; // даёт сигнал
+            case DEEPSLATE_LAPIS_ORE:   return Material.LAPIS_BLOCK;
+            case DEEPSLATE_COAL_ORE:    return Material.COAL_BLOCK;
+            case DEEPSLATE_COPPER_ORE:  return Material.COPPER_BLOCK;
+            case DEEPSLATE_IRON_ORE:    return Material.IRON_BLOCK;
+            case DEEPSLATE_GOLD_ORE:    return Material.GOLD_BLOCK;
+            default: return ore;
+        }
+    }
+}
