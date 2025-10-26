@@ -19,15 +19,21 @@ public class BedrockOresPlugin extends JavaPlugin {
         this.nodeManager = new NodeManager(this);
         nodeManager.load();
 
+        // Применим «цельный» вид к уже существующим узлам в загруженных чанках
+        if (getConfig().getBoolean("visual.server-solid.enabled", false)) {
+            int applied = nodeManager.applyServerVisualsForAllNodes(true); // только загруженные чанки
+            getLogger().info("Server-solid visuals applied to nodes: " + applied);
+        }
+
         this.generationListener = new GenerationListener(this, nodeManager);
         Bukkit.getPluginManager().registerEvents(generationListener, this);
         Bukkit.getPluginManager().registerEvents(new OreListeners(this, nodeManager), this);
 
-        // Периодическое сохранение и тик респаунов
+        // Периодическое сохранение и тики респаунов
         Bukkit.getScheduler().runTaskTimer(this, nodeManager::save, 20L * 60L, 20L * 60L);
         Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
 
-        // Команда админа (включая /bedrockores visdebug)
+        // Команда админа (включая visdebug и applyvisuals)
         BedrockOresCommand cmd = new BedrockOresCommand(this, nodeManager, generationListener);
         if (getCommand("bedrockores") != null) {
             getCommand("bedrockores").setExecutor(cmd);
