@@ -194,3 +194,18 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
             }
             if ("visdebug".equalsIgnoreCase(args[0])) {
                 List<String> mats = Arrays.asList(
+                        "LIGHT_BLUE_STAINED_GLASS","LIME_STAINED_GLASS","RED_STAINED_GLASS","BLUE_STAINED_GLASS",
+                        "YELLOW_STAINED_GLASS","WHITE_STAINED_GLASS","BLACK_STAINED_GLASS","ORANGE_STAINED_GLASS"
+                );
+                StringUtil.copyPartialMatches(args[1], mats, out);
+                return out;
+            }
+        }
+        if (args.length == 3 && "visdebug".equalsIgnoreCase(args[0])) {
+            List<String> secs = Arrays.asList("3", "5", "10", "15");
+            StringUtil.copyPartialMatches(args[2], secs, out);
+            return out;
+        }
+        return out;
+    }
+}
