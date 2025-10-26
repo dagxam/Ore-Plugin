@@ -252,7 +252,7 @@ public class NodeManager {
                     Location loc = new Location(w, x, y, z);
                     nodes.put(key(loc), new NodeData(mat, hits, maxHits));
 
-                    // Восстановим отображение блока
+                    // Восстановим отображение блока (цельный вид, если включен режим)
                     Material toPlace = mat;
                     if (serverSolidEnabled()) {
                         Material disp = displayFor(mat);
@@ -443,7 +443,7 @@ public class NodeManager {
         return out;
     }
 
-    // ===== Режим "цельные" серверные блоки =====
+    // ===== Режим «цельные» серверные блоки =====
 
     private boolean serverSolidEnabled() {
         return plugin.getConfig().getBoolean("visual.server-solid.enabled", false);
@@ -467,7 +467,7 @@ public class NodeManager {
         switch (ore) {
             case DEEPSLATE_DIAMOND_ORE: return Material.DIAMOND_BLOCK;
             case DEEPSLATE_EMERALD_ORE: return Material.EMERALD_BLOCK;
-            case DEEPSLATE_REDSTONE_ORE: return Material.REDSTONE_BLOCK; // даёт сигнал
+            case DEEPSLATE_REDSTONE_ORE: return Material.REDSTONE_BLOCK; // подаёт сигнал
             case DEEPSLATE_LAPIS_ORE:   return Material.LAPIS_BLOCK;
             case DEEPSLATE_COAL_ORE:    return Material.COAL_BLOCK;
             case DEEPSLATE_COPPER_ORE:  return Material.COPPER_BLOCK;
@@ -475,5 +475,42 @@ public class NodeManager {
             case DEEPSLATE_GOLD_ORE:    return Material.GOLD_BLOCK;
             default: return ore;
         }
+    }
+
+    // ===== Применение «цельного» вида к уже существующим узлам =====
+
+    public int applyServerVisualsInWorld(World world, boolean onlyLoadedChunks) {
+        if (!serverSolidEnabled()) return 0;
+        int changed = 0;
+        UUID wid = world.getUID();
+
+        for (String k : nodes.keySet()) {
+            Location loc = toLocation(k);
+            if (loc == null) continue;
+            if (!loc.getWorld().getUID().equals(wid)) continue;
+
+            if (onlyLoadedChunks && !loc.getChunk().isLoaded()) continue;
+
+            NodeData nd = nodes.get(k);
+            if (nd == null) continue;
+
+            Material toPlace = displayFor(nd.oreMaterial);
+            if (toPlace == null) toPlace = nd.oreMaterial;
+
+            if (loc.getBlock().getType() != toPlace) {
+                loc.getBlock().setType(toPlace, false);
+                changed++;
+            }
+        }
+        return changed;
+    }
+
+    public int applyServerVisualsForAllNodes(boolean onlyLoadedChunks) {
+        if (!serverSolidEnabled()) return 0;
+        int total = 0;
+        for (World w : plugin.getServer().getWorlds()) {
+            total += applyServerVisualsInWorld(w, onlyLoadedChunks);
+        }
+        return total;
     }
 }
