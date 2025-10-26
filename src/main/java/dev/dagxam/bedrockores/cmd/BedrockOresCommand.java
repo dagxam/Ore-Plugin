@@ -38,9 +38,10 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
             sender.sendMessage("§e/bedrockores reload §7- перезагрузить конфиг и веса руд");
             sender.sendMessage("§e/bedrockores clearflags [мир|all] §7- очистить флаги обработанных чанков");
-            sender.sendMessage("§e/bedrockores regenloaded [мир|all] §7- перегенерировать узлы в загруженных чанках");
+            sender.sendMessage("§e/bedrockores regenloaded [мир|all] §7- перегенерировать узлы в загруженных чанках (ленивая очередь)");
             sender.sendMessage("§e/bedrockores restartgen [мир|all] §7- clearflags + regenloaded");
-            sender.sendMessage("§e/bedrockores visdebug [материал] [сек] §7- показать клиентский фейк-блок на целевом блоке");
+            sender.sendMessage("§e/bedrockores applyvisuals [мир|all] §7- применить «цельный» вид к узлам в загруженных чанках");
+            sender.sendMessage("§e/bedrockores visdebug [материал] [сек] §7- показать фейк-блок на целевом блоке (диагностика)");
             return true;
         }
 
@@ -74,7 +75,7 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                     for (Chunk c : w.getLoadedChunks()) {
                         nodeManager.removeRespawnsInChunk(c);
                         nodeManager.removeNodesInChunk(c);
-                        generation.queueChunk(c); // лениво, через очередь
+                        generation.queueChunk(c); // ленивая очередь генерации
                         chunks++;
                     }
                 }
@@ -101,6 +102,19 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                 }
                 nodeManager.save();
                 sender.sendMessage("§aРестарт генерации выполнен (в очередь). Чанков: §f" + chunks + " §7(миры: " + names(targets) + ")");
+                return true;
+            }
+            case "applyvisuals": {
+                List<World> targets = resolveWorlds(args, 1);
+                if (targets.isEmpty()) {
+                    sender.sendMessage("§cМир не найден или не включён в enabled-worlds.");
+                    return true;
+                }
+                int total = 0;
+                for (World w : targets) {
+                    total += nodeManager.applyServerVisualsInWorld(w, true); // только загруженные чанки
+                }
+                sender.sendMessage("§aПрименён «цельный» вид к узлам: §f" + total + " §7(миры: " + names(targets) + ")");
                 return true;
             }
             case "visdebug": {
@@ -136,7 +150,6 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                 // Вернуть реальный вид через N секунд
                 int delay = seconds * 20;
                 plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
-                    // если игрок в другом мире — всё равно отправим, клиент поправит сам
                     p.sendBlockChange(target, real);
                 }, delay);
                 return true;
@@ -171,41 +184,4 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
         return targets;
     }
 
-    private String names(List<World> worlds) {
-        List<String> n = new ArrayList<>();
-        for (World w : worlds) n.add(w.getName());
-        return String.join(", ", n);
-    }
-
-    @Override
-    public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
-        List<String> out = new ArrayList<>();
-        if (args.length == 1) {
-            List<String> base = List.of("reload", "clearflags", "regenloaded", "restartgen", "visdebug", "help");
-            StringUtil.copyPartialMatches(args[0], base, out);
-            return out;
-        }
-        if (args.length == 2) {
-            if ("clearflags".equalsIgnoreCase(args[0]) || "regenloaded".equalsIgnoreCase(args[0]) || "restartgen".equalsIgnoreCase(args[0])) {
-                List<String> worlds = new ArrayList<>(plugin.getConfig().getStringList("enabled-worlds"));
-                worlds.add("all");
-                StringUtil.copyPartialMatches(args[1], worlds, out);
-                return out;
-            }
-            if ("visdebug".equalsIgnoreCase(args[0])) {
-                List<String> mats = Arrays.asList(
-                        "LIGHT_BLUE_STAINED_GLASS","LIME_STAINED_GLASS","RED_STAINED_GLASS","BLUE_STAINED_GLASS",
-                        "YELLOW_STAINED_GLASS","WHITE_STAINED_GLASS","BLACK_STAINED_GLASS","ORANGE_STAINED_GLASS"
-                );
-                StringUtil.copyPartialMatches(args[1], mats, out);
-                return out;
-            }
-        }
-        if (args.length == 3 && "visdebug".equalsIgnoreCase(args[0])) {
-            List<String> secs = Arrays.asList("3", "5", "10", "15");
-            StringUtil.copyPartialMatches(args[2], secs, out);
-            return out;
-        }
-        return out;
-    }
-}
+    private String 
