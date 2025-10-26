@@ -33,14 +33,11 @@ generation:
     brightness: 15      # 0..15 (если API доступно)
 
     visual:
-  mode: fakeblock
+  mode: fakeblock           # fakeblock | fakeblock_proto | none
   fakeblock:
-    # Материал по умолчанию, если для руды нет маппинга:
     default: LIGHT_BLUE_STAINED_GLASS
     period-ticks: 20
     radius-chunks: 3
-
-    # Маппинг: РУДА -> МАТЕРИАЛ_СТЕКЛА (client-side)
     map:
       DEEPSLATE_DIAMOND_ORE: LIGHT_BLUE_STAINED_GLASS
       DEEPSLATE_EMERALD_ORE: LIME_STAINED_GLASS
