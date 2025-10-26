@@ -19,7 +19,6 @@ public class GenerationListener implements Listener {
     private final NodeManager nodeManager;
     private final Random random = new Random();
 
-    // Веса по умолчанию и по мирам
     private Map<Material, Integer> weightsDefault = new LinkedHashMap<>();
     private Map<Material, Integer> weightsOverworld = null;
     private Map<Material, Integer> weightsNether = null;
@@ -32,13 +31,11 @@ public class GenerationListener implements Listener {
 
     public void reloadWeights() {
         weightsDefault = loadWeights("ore-weights");
-        // Необязательные секции для миров
         Map<Material, Integer> ow = loadWeights("ore-weights-overworld");
         Map<Material, Integer> ne = loadWeights("ore-weights-nether");
         weightsOverworld = ow.isEmpty() ? null : ow;
         weightsNether = ne.isEmpty() ? null : ne;
 
-        // Если пусто — дефолт
         if (weightsDefault.isEmpty()) {
             LinkedHashMap<Material, Integer> def = new LinkedHashMap<>();
             def.put(Material.DEEPSLATE_REDSTONE_ORE, 8);
@@ -49,7 +46,7 @@ public class GenerationListener implements Listener {
             def.put(Material.DEEPSLATE_LAPIS_ORE, 3);
             def.put(Material.DEEPSLATE_DIAMOND_ORE, 1);
             def.put(Material.DEEPSLATE_EMERALD_ORE, 1);
-            def.put(Material.ANCIENT_DEBRIS, 1); // чтобы была и в аду по умолчанию
+            def.put(Material.ANCIENT_DEBRIS, 1);
             weightsDefault = def;
         }
     }
@@ -70,12 +67,8 @@ public class GenerationListener implements Listener {
     }
 
     private Map<Material, Integer> weightsFor(World world) {
-        if (world.getEnvironment() == Environment.NETHER && weightsNether != null) {
-            return weightsNether;
-        }
-        if (world.getEnvironment() == Environment.NORMAL && weightsOverworld != null) {
-            return weightsOverworld;
-        }
+        if (world.getEnvironment() == Environment.NETHER && weightsNether != null) return weightsNether;
+        if (world.getEnvironment() == Environment.NORMAL && weightsOverworld != null) return weightsOverworld;
         return weightsDefault;
     }
 
@@ -96,11 +89,10 @@ public class GenerationListener implements Listener {
         nodeManager.processDueRespawnsInChunk(chunk);
     }
 
-    // Публично — используется командами
+    // ————— Генерация строго в пределах данного чанка —————
     public void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
 
-        // Вертикальный диапазон
         int minY = world.getMinHeight();
         int maxY = world.getMaxHeight() - 1;
         if (plugin.getConfig().isInt("generation.y-min")) {
@@ -111,8 +103,8 @@ public class GenerationListener implements Listener {
         }
 
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
-        double densityMul = plugin.getConfig().getDouble("generation.density-multiplier", 1.0D);
-        chance = Math.max(0.0D, chance * densityMul);
+        chance *= plugin.getConfig().getDouble("generation.density-multiplier", 1.0D);
+        if (chance < 0.0D) chance = 0.0D;
 
         int minSpacing = Math.max(1, plugin.getConfig().getInt("generation.cluster.min-spacing", 4));
         int spacing2 = minSpacing * minSpacing;
@@ -129,6 +121,8 @@ public class GenerationListener implements Listener {
 
         int placed = 0;
         List<int[]> placedCentersLocal = new ArrayList<>();
+        int baseX = chunk.getX() << 4;
+        int baseZ = chunk.getZ() << 4;
 
         // Базовый проход
         outer:
@@ -137,20 +131,20 @@ public class GenerationListener implements Listener {
                 for (int y = minY; y <= maxY; y++) {
                     if (random.nextDouble() > chance) continue;
 
-                    int x = (chunk.getX() << 4) + lx;
-                    int z = (chunk.getZ() << 4) + lz;
-                    Location loc = new Location(world, x, y, z);
+                    int x = baseX + lx;
+                    int z = baseZ + lz;
 
-                    Material host = loc.getBlock().getType();
-                    if (!isReplaceable(host)) continue;
+                    Material host = fastType(chunk, x, y, z);
+                    if (host == null) continue;               // вышли за границы чанка — пропускаем
+                    if (!isReplaceable(host, world)) continue;
 
                     if (!farEnoughFromLocal2D(placedCentersLocal, x, z, spacing2)) continue;
-                    if (!farEnoughFromExistingNodes2D(loc, minSpacing, spacing2)) continue;
+                    if (!farEnoughFromExistingNodes2D(world, x, y, z, minSpacing, spacing2)) continue;
 
                     Material ore = rollOre(weights, world);
                     if (ore == null) continue;
 
-                    if (tryPlaceCluster(loc, clusterMin, clusterMax, minY, maxY, minSpacing, spacing2)) {
+                    if (tryPlaceCluster(chunk, x, y, z, ore, clusterMin, clusterMax, minY, maxY, minSpacing, spacing2)) {
                         placedCentersLocal.add(new int[]{x, z});
                         placed++;
                         if (placed >= maxClusters) break outer;
@@ -159,24 +153,26 @@ public class GenerationListener implements Listener {
             }
         }
 
-        // Добор
+        // Добор до целевого количества кластеров
         if (placed < targetClusters) {
             int need = targetClusters - placed;
             int attempts = Math.max(need * fillAttemptsPerCluster, need);
-            while (attempts-- > 0 && placed < targetClusters) {
-                int rx = (chunk.getX() << 4) + random.nextInt(16);
-                int rz = (chunk.getZ() << 4) + random.nextInt(16);
-                int ry = minY + random.nextInt(Math.max(1, (maxY - minY + 1)));
-                Location loc = new Location(world, rx, ry, rz);
 
-                if (!isReplaceable(loc.getBlock().getType())) continue;
+            while (attempts-- > 0 && placed < targetClusters) {
+                int rx = baseX + random.nextInt(16);
+                int rz = baseZ + random.nextInt(16);
+                int ry = minY + random.nextInt(Math.max(1, (maxY - minY + 1)));
+
+                Material host = fastType(chunk, rx, ry, rz);
+                if (host == null || !isReplaceable(host, world)) continue;
+
                 if (!farEnoughFromLocal2D(placedCentersLocal, rx, rz, spacing2)) continue;
-                if (!farEnoughFromExistingNodes2D(loc, minSpacing, spacing2)) continue;
+                if (!farEnoughFromExistingNodes2D(world, rx, ry, rz, minSpacing, spacing2)) continue;
 
                 Material ore = rollOre(weights, world);
                 if (ore == null) continue;
 
-                if (tryPlaceCluster(loc, clusterMin, clusterMax, minY, maxY, minSpacing, spacing2)) {
+                if (tryPlaceCluster(chunk, rx, ry, rz, ore, clusterMin, clusterMax, minY, maxY, minSpacing, spacing2)) {
                     placedCentersLocal.add(new int[]{rx, rz});
                     placed++;
                 }
@@ -184,15 +180,29 @@ public class GenerationListener implements Listener {
         }
     }
 
-    private boolean isReplaceable(Material m) {
+    // Быстрый тип блока в текущем чанке. Если (x,z) не в чанке — вернём null и пропустим.
+    private Material fastType(Chunk chunk, int x, int y, int z) {
+        int baseX = chunk.getX() << 4;
+        int baseZ = chunk.getZ() << 4;
+        int lx = x - baseX;
+        int lz = z - baseZ;
+        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) return null;
+        return chunk.getBlock(lx, y, lz).getType();
+    }
+
+    private boolean isReplaceable(Material m, World w) {
         // Оверворлд
-        if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
-        String n = m.name();
-        if (n.endsWith("_STONE") || n.endsWith("ANDESITE") || n.endsWith("DIORITE") || n.endsWith("GRANITE")) return true;
-
-        // Ад: нетеравские породы
-        if (m == Material.NETHERRACK || m == Material.BASALT || m == Material.BLACKSTONE) return true;
-
+        if (w.getEnvironment() == Environment.NORMAL) {
+            if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
+            String n = m.name();
+            if (n.endsWith("_STONE") || n.endsWith("ANDESITE") || n.endsWith("DIORITE") || n.endsWith("GRANITE")) return true;
+            return false;
+        }
+        // Ад
+        if (w.getEnvironment() == Environment.NETHER) {
+            return (m == Material.NETHERRACK || m == Material.BASALT || m == Material.BLACKSTONE);
+        }
+        // Прочее (Энд) — по умолчанию отключено (можно добавить при необходимости)
         return false;
     }
 
@@ -200,19 +210,18 @@ public class GenerationListener implements Listener {
         for (int[] c : centers) {
             int dx = c[0] - x;
             int dz = c[1] - z;
-            if (dx*dx + dz*dz <= spacing2) return false;
+            if (dx * dx + dz * dz <= spacing2) return false;
         }
         return true;
     }
 
-    private boolean farEnoughFromExistingNodes2D(Location loc, int spacing, int spacing2) {
-        World w = loc.getWorld();
-        int x = loc.getBlockX(), z = loc.getBlockZ(), y = loc.getBlockY();
+    // Проверяем существующие узлы (наши) поблизости (малый радиус по Y)
+    private boolean farEnoughFromExistingNodes2D(World w, int x, int y, int z, int spacing, int spacing2) {
         for (int dy = -2; dy <= 2; dy++) {
             int yy = y + dy;
             for (int dx = -spacing; dx <= spacing; dx++) {
                 for (int dz = -spacing; dz <= spacing; dz++) {
-                    int d2 = dx*dx + dz*dz;
+                    int d2 = dx * dx + dz * dz;
                     if (d2 > spacing2) continue;
                     if (nodeManager.isNode(new Location(w, x + dx, yy, z + dz))) return false;
                 }
@@ -221,45 +230,50 @@ public class GenerationListener implements Listener {
         return true;
     }
 
-    private boolean tryPlaceCluster(Location center, int clusterMin, int clusterMax, int minY, int maxY, int minSpacing, int spacing2) {
-        World world = center.getWorld();
-        if (!isReplaceable(center.getBlock().getType())) return false;
+    // Кластер растём только внутри текущего чанка — никаких выходов в соседние
+    private boolean tryPlaceCluster(Chunk chunk,
+                                    int cx, int cy, int cz,
+                                    Material ore,
+                                    int clusterMin, int clusterMax,
+                                    int minY, int maxY,
+                                    int minSpacing, int spacing2) {
+
+        World world = chunk.getWorld();
+        if (fastType(chunk, cx, cy, cz) == null) return false;           // за пределами чанка
+        if (!isReplaceable(fastType(chunk, cx, cy, cz), world)) return false;
 
         int size = clusterMin + random.nextInt(clusterMax - clusterMin + 1);
         List<Location> cluster = new ArrayList<>(size);
-        cluster.add(center.clone());
+        cluster.add(new Location(world, cx, cy, cz));
 
         int idx = 0;
+        int[][] dirs = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
         while (cluster.size() < size && idx < cluster.size()) {
             Location base = cluster.get(idx++);
-            // 6 направлений без диагоналей
-            int[][] dirs = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+            int bx = base.getBlockX(), by = base.getBlockY(), bz = base.getBlockZ();
+
             for (int[] d : dirs) {
                 if (cluster.size() >= size) break;
-                int nx = base.getBlockX() + d[0];
-                int ny = base.getBlockY() + d[1];
-                int nz = base.getBlockZ() + d[2];
+                int nx = bx + d[0], ny = by + d[1], nz = bz + d[2];
                 if (ny < minY || ny > maxY) continue;
-                Location nloc = new Location(world, nx, ny, nz);
-                if (!isReplaceable(nloc.getBlock().getType())) continue;
-                // Не рядом с другими узлами
-                if (!farEnoughFromExistingNodes2D(nloc, minSpacing, spacing2)) continue;
-                // Не дубликат
-                boolean exists = false;
+
+                // Только текущий чанк!
+                if (fastType(chunk, nx, ny, nz) == null) continue;
+
+                Material host = fastType(chunk, nx, ny, nz);
+                if (!isReplaceable(host, world)) continue;
+                if (!farEnoughFromExistingNodes2D(world, nx, ny, nz, minSpacing, spacing2)) continue;
+
+                boolean dup = false;
                 for (Location l : cluster) {
-                    if (l.getBlockX()==nx && l.getBlockY()==ny && l.getBlockZ()==nz) { exists = true; break; }
+                    if (l.getBlockX()==nx && l.getBlockY()==ny && l.getBlockZ()==nz) { dup = true; break; }
                 }
-                if (!exists) cluster.add(nloc);
+                if (!dup) cluster.add(new Location(world, nx, ny, nz));
             }
         }
 
         if (cluster.isEmpty()) return false;
 
-        // Выбираем руду для кластера единожды (по мирам)
-        Material ore = rollOre(weightsFor(world), world);
-        if (ore == null) return false;
-
-        // Размещаем узлы
         for (Location l : cluster) {
             nodeManager.addNode(l, ore, nodeManager.randomHits());
         }
@@ -268,22 +282,19 @@ public class GenerationListener implements Listener {
 
     private Material rollOre(Map<Material, Integer> weights, World world) {
         if (weights == null || weights.isEmpty()) return null;
+        // Небольшая защита: ANCIENT_DEBRIS только в аду
         int total = 0;
-        for (int v : weights.values()) total += v;
+        for (Map.Entry<Material, Integer> e : weights.entrySet()) {
+            if (e.getKey() == Material.ANCIENT_DEBRIS && world.getEnvironment() != Environment.NETHER) continue;
+            total += e.getValue();
+        }
         if (total <= 0) return null;
+
         int r = random.nextInt(total), acc = 0;
         for (Map.Entry<Material, Integer> e : weights.entrySet()) {
-            Material m = e.getKey();
-            // Если это АНЧЕНТ — логично ограничить им ад
-            if (m == Material.ANCIENT_DEBRIS && world.getEnvironment() != Environment.NETHER) {
-                continue;
-            }
+            if (e.getKey() == Material.ANCIENT_DEBRIS && world.getEnvironment() != Environment.NETHER) continue;
             acc += e.getValue();
-            if (r < acc) return m;
-        }
-        // если на ограничении не подобрал — вернём что-то из дефолта
-        for (Map.Entry<Material, Integer> e : weights.entrySet()) {
-            if (e.getKey() != Material.ANCIENT_DEBRIS) return e.getKey();
+            if (r < acc) return e.getKey();
         }
         return null;
     }
