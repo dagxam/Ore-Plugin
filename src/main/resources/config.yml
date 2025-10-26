@@ -33,6 +33,7 @@ generation:
     brightness: 15      # 0..15 (если API доступно)
 
     visual:
+  mode: none           # overlay/particles/fakeblock не используются
   server-solid:
     enabled: true
     # Необязательная кастомная карта: руда -> какой блок показать физически
