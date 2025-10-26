@@ -1,6 +1,5 @@
 package dev.dagxam.bedrockores.node;
 
-import dev.dagxam.bedrockores.visual.VisualOverlay;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
@@ -17,27 +16,20 @@ import java.util.*;
 public class NodeManager {
     private final Plugin plugin;
 
-    // Активные узлы
+    // Активные узлы: key(worldUUID:x:y:z) -> данные узла (типа исходной руды)
     private final Map<String, NodeData> nodes = new HashMap<>();
     // Обработанные чанки
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
     // Очередь респаунов
     private final Map<String, RespawnData> respawns = new HashMap<>();
-    // Индекс узлов по чанкам
+    // Индекс узлов по чанкам для быстрых запросов (визуализация и пр.)
     private final Map<UUID, Map<Long, List<Location>>> nodesByChunk = new HashMap<>();
-
-    // ВИЗУАЛИЗАЦИЯ (оверлей)
-    private VisualOverlay overlay;
 
     private final File dataFile;
 
     public NodeManager(Plugin plugin) {
         this.plugin = plugin;
         this.dataFile = new File(plugin.getDataFolder(), "nodes.yml");
-    }
-
-    public void setOverlay(VisualOverlay overlay) {
-        this.overlay = overlay;
     }
 
     public static String key(Location loc) {
@@ -48,22 +40,33 @@ public class NodeManager {
         return (((long) cx) << 32) ^ (cz & 0xffffffffL);
     }
 
-    public boolean isNode(Location loc) { return nodes.containsKey(key(loc)); }
-    public NodeData getNode(Location loc) { return nodes.get(key(loc)); }
+    public boolean isNode(Location loc) {
+        return nodes.containsKey(key(loc));
+    }
+
+    public NodeData getNode(Location loc) {
+        return nodes.get(key(loc));
+    }
 
     public void addNode(Location loc, Material oreMaterial, int hits) {
         int max = hits;
         NodeData nd = new NodeData(oreMaterial, hits, max);
         nodes.put(key(loc), nd);
-        loc.getBlock().setType(oreMaterial, false);
+
+        // Что ставим физически
+        Material toPlace = oreMaterial;
+        if (serverSolidEnabled()) {
+            Material disp = displayFor(oreMaterial);
+            if (disp != null) toPlace = disp;
+        }
+        loc.getBlock().setType(toPlace, false);
+
         indexAdd(loc);
-        if (overlay != null) overlay.onNodeAdded(loc, nd); // NEW
     }
 
     public void removeNode(Location loc) {
         nodes.remove(key(loc));
         indexRemove(loc);
-        if (overlay != null) overlay.onNodeRemoved(loc);   // NEW
     }
 
     public void markChunkProcessed(World world, int cx, int cz) {
@@ -88,16 +91,18 @@ public class NodeManager {
             Map.Entry<String, NodeData> e = it.next();
             String[] p = e.getKey().split(":");
             if (p.length != 4) continue;
+
             UUID w = UUID.fromString(p[0]);
             if (!w.equals(wid)) continue;
+
             int x = Integer.parseInt(p[1]);
             int y = Integer.parseInt(p[2]);
             int z = Integer.parseInt(p[3]);
+
             if ((x >> 4) == cx && (z >> 4) == cz) {
                 Location loc = new Location(chunk.getWorld(), x, y, z);
                 it.remove();
                 indexRemove(loc);
-                if (overlay != null) overlay.onNodeRemoved(loc); // NEW
                 count++;
             }
         }
@@ -115,8 +120,10 @@ public class NodeManager {
             Map.Entry<String, RespawnData> e = it.next();
             String[] p = e.getKey().split(":");
             if (p.length != 4) continue;
+
             UUID w = UUID.fromString(p[0]);
             if (!w.equals(wid)) continue;
+
             int x = Integer.parseInt(p[1]);
             int z = Integer.parseInt(p[3]);
             if ((x >> 4) == cx && (z >> 4) == cz) {
@@ -139,17 +146,21 @@ public class NodeManager {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
         List<String> done = new ArrayList<>();
+
         for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
             RespawnData rd = e.getValue();
             if (rd.dueAtMillis > now) continue;
+
             Location loc = locationFromKey(e.getKey());
             if (loc == null) { done.add(e.getKey()); continue; }
             World w = loc.getWorld();
             if (w == null) { done.add(e.getKey()); continue; }
             if (!loc.getChunk().isLoaded()) continue;
+
             addNode(loc, rd.oreMaterial, randomHits());
             done.add(e.getKey());
         }
+
         for (String k : done) respawns.remove(k);
         if (!done.isEmpty()) save();
     }
@@ -160,22 +171,29 @@ public class NodeManager {
         UUID wid = chunk.getWorld().getUID();
         int cx = chunk.getX();
         int cz = chunk.getZ();
+
         List<String> done = new ArrayList<>();
         for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
             String[] p = e.getKey().split(":");
             if (p.length != 4) continue;
+
             UUID w = UUID.fromString(p[0]);
             if (!w.equals(wid)) continue;
+
             int x = Integer.parseInt(p[1]);
             int y = Integer.parseInt(p[2]);
             int z = Integer.parseInt(p[3]);
+
             if ((x >> 4) != cx || (z >> 4) != cz) continue;
+
             RespawnData rd = e.getValue();
             if (rd.dueAtMillis > now) continue;
+
             Location loc = new Location(chunk.getWorld(), x, y, z);
             addNode(loc, rd.oreMaterial, randomHits());
             done.add(e.getKey());
         }
+
         for (String k : done) respawns.remove(k);
         if (!done.isEmpty()) save();
     }
@@ -191,7 +209,9 @@ public class NodeManager {
             World w = Bukkit.getWorld(world);
             if (w == null) return null;
             return new Location(w, x, y, z);
-        } catch (Exception e) { return null; }
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public void load() {
@@ -213,9 +233,19 @@ public class NodeManager {
 
                     World w = Bukkit.getWorld(worldId);
                     if (w == null) continue;
+
                     Location loc = new Location(w, x, y, z);
                     nodes.put(key(loc), new NodeData(mat, hits, maxHits));
-                    if (loc.getBlock().getType() != mat) loc.getBlock().setType(mat, false);
+
+                    // Восстановим физический вид блока
+                    Material toPlace = mat;
+                    if (serverSolidEnabled()) {
+                        Material disp = displayFor(mat);
+                        if (disp != null) toPlace = disp;
+                    }
+                    if (loc.getBlock().getType() != toPlace) {
+                        loc.getBlock().setType(toPlace, false);
+                    }
                 } catch (Exception ex) {
                     plugin.getLogger().warning("Bad node entry: " + id + " -> " + ex.getMessage());
                 }
@@ -256,6 +286,7 @@ public class NodeManager {
 
                     World w = Bukkit.getWorld(worldId);
                     if (w == null) continue;
+
                     Location loc = new Location(w, x, y, z);
                     respawns.put(key(loc), new RespawnData(mat, due));
                 } catch (Exception ex) {
@@ -318,8 +349,11 @@ public class NodeManager {
             yml.set(path + ".dueAt", rd.dueAtMillis);
         }
 
-        try { yml.save(dataFile); }
-        catch (IOException ex) { plugin.getLogger().severe("Failed to save nodes.yml: " + ex.getMessage()); }
+        try {
+            yml.save(dataFile);
+        } catch (IOException ex) {
+            plugin.getLogger().severe("Failed to save nodes.yml: " + ex.getMessage());
+        }
     }
 
     public int randomHits() {
@@ -330,7 +364,8 @@ public class NodeManager {
         return min + new Random().nextInt(max - min + 1);
     }
 
-    // ===== Индексация =====
+    // ===== Индексация (для визуализации/быстрого доступа) =====
+
     private void indexAdd(Location loc) {
         Map<Long, List<Location>> map = nodesByChunk.computeIfAbsent(loc.getWorld().getUID(), k -> new HashMap<>());
         long ck = chunkKey(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
@@ -366,22 +401,3 @@ public class NodeManager {
             int y = Integer.parseInt(parts[2]);
             int z = Integer.parseInt(parts[3]);
             World w = Bukkit.getWorld(world);
-            if (w == null) return null;
-            return new Location(w, x, y, z);
-        } catch (Exception e) { return null; }
-    }
-
-    public List<Location> getNodesAroundChunks(World w, int cx, int cz, int radius) {
-        Map<Long, List<Location>> map = nodesByChunk.get(w.getUID());
-        List<Location> out = new ArrayList<>();
-        if (map == null) return out;
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                long ck = chunkKey(cx + dx, cz + dz);
-                List<Location> list = map.get(ck);
-                if (list != null) out.addAll(list);
-            }
-        }
-        return out;
-    }
-}
