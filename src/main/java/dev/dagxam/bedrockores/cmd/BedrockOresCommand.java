@@ -35,7 +35,7 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage("§e/bedrockores clearflags [мир|all] §7- очистить флаги обработанных чанков");
             sender.sendMessage("§e/bedrockores regenloaded [мир|all] §7- перегенерировать узлы в загруженных чанках");
             sender.sendMessage("§e/bedrockores restartgen [мир|all] §7- clearflags + regenloaded");
-            sender.sendMessage("§e/bedrockores applyvisuals [мир|all] §7- применить «цельный» вид к узлам в загруженных чанках");
+            sender.sendMessage("§e/bedrockores applyvisuals [мир|all] [force] §7- применить «цельный» вид к узлам в загруженных чанках");
             return true;
         }
 
@@ -69,7 +69,7 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                     for (Chunk c : w.getLoadedChunks()) {
                         nodeManager.removeRespawnsInChunk(c);
                         nodeManager.removeNodesInChunk(c);
-                        generation.generateInChunk(c); // безопасный синхронный вызов
+                        generation.generateInChunk(c);
                         nodeManager.markChunkProcessed(w, c.getX(), c.getZ());
                         chunks++;
                     }
@@ -101,8 +101,10 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
             case "applyvisuals": {
-                if (!plugin.getConfig().getBoolean("visual.server-solid.enabled", false)) {
-                    sender.sendMessage("§evisual.server-solid.enabled: false §7— включи в config.yml и /bedrockores reload");
+                boolean enabled = plugin.getConfig().getBoolean("visual.server-solid.enabled", false);
+                boolean force = args.length >= 3 && args[2].equalsIgnoreCase("force");
+                if (!enabled && !force) {
+                    sender.sendMessage("§evisual.server-solid.enabled: false §7— включи в config.yml и /" + label + " reload, или добавь §fforce§7: /" + label + " applyvisuals all force");
                     return true;
                 }
                 List<World> targets = resolveWorlds(args, 1);
@@ -112,7 +114,7 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                 }
                 int total = 0;
                 for (World w : targets) {
-                    total += nodeManager.applyServerVisualsInWorld(w, true); // только загруженные
+                    total += nodeManager.applyServerVisualsInWorld(w, true); // только загруженные чанки
                 }
                 sender.sendMessage("§aПрименён «цельный» вид к узлам: §f" + total + " §7(миры: " + names(targets) + ")");
                 return true;
@@ -160,6 +162,11 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
             List<String> worlds = new ArrayList<>(plugin.getConfig().getStringList("enabled-worlds"));
             worlds.add("all");
             StringUtil.copyPartialMatches(args[1], worlds, out);
+            return out;
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("applyvisuals")) {
+            List<String> opts = List.of("force");
+            StringUtil.copyPartialMatches(args[2], opts, out);
             return out;
         }
         return out;
