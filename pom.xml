@@ -37,7 +37,7 @@
       <scope>provided</scope>
     </dependency>
 
-    <!-- ProtocolLib для режима fakeblock_proto (если используешь) -->
+    <!-- ProtocolLib для режима fakeblock_proto -->
     <dependency>
       <groupId>com.comphenix.protocol</groupId>
       <artifactId>ProtocolLib</artifactId>
@@ -99,3 +99,6 @@
           </compilerArgs>
         </configuration>
       </plugin>
+    </plugins>
+  </build>
+</project>
