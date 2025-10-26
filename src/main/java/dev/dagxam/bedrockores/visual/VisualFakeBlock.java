@@ -15,8 +15,8 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.*;
 
 /**
- * Показывает игрокам фейковый блок поверх "узла" руды (client-side),
- * не меняя реальный блок на сервере. Поддерживает маппинг руда -> стекло.
+ * Показывает клиенту "фейковый" блок на месте узла (без смены реального блока).
+ * Имеет маппинг руда -> цвет стекла.
  */
 public class VisualFakeBlock {
 
@@ -28,7 +28,7 @@ public class VisualFakeBlock {
     private final int periodTicks;
     private final int radiusChunks;
 
-    // какие узлы уже "перекрашены" для каждого игрока: playerUUID -> set(nodeKey)
+    // Какие узлы уже перекрашены для каждого игрока
     private final Map<UUID, Set<String>> shown = new HashMap<>();
     private BukkitTask task;
 
@@ -77,7 +77,7 @@ public class VisualFakeBlock {
     }
 
     public void stop() {
-        // Вернём всем игрокам реальные блоки вместо фейковых
+        // Вернуть реальный вид всем игрокам
         for (Player p : Bukkit.getOnlinePlayers()) {
             Set<String> set = shown.get(p.getUniqueId());
             if (set == null) continue;
@@ -110,7 +110,7 @@ public class VisualFakeBlock {
                 newVisible.add(NodeManager.key(loc));
             }
 
-            // Какие уже были показаны игроку (перекрашены)
+            // Какие уже были показаны игроку
             Set<String> wasShown = shown.computeIfAbsent(p.getUniqueId(), id -> new HashSet<>());
 
             // Показать новые
