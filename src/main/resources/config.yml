@@ -33,7 +33,7 @@ generation:
     brightness: 15      # 0..15 (если API доступно)
 
     visual:
-  mode: fakeblock           # fakeblock | fakeblock_proto | none
+  mode: fakeblock
   fakeblock:
     default: LIGHT_BLUE_STAINED_GLASS
     period-ticks: 20
