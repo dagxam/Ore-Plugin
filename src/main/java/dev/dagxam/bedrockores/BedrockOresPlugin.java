@@ -5,8 +5,7 @@ import dev.dagxam.bedrockores.gen.GenerationListener;
 import dev.dagxam.bedrockores.node.NodeManager;
 import dev.dagxam.bedrockores.node.OreListeners;
 import dev.dagxam.bedrockores.visual.VisualFakeBlock;
-import dev.dagxam.bedrockores.visual.VisualOverlay;
-import dev.dagxam.bedrockores.visual.VisualParticles;
+import dev.dagxam.bedrockores.visual.VisualFakeBlockProtocol;
 import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -15,10 +14,9 @@ public class BedrockOresPlugin extends JavaPlugin {
     private NodeManager nodeManager;
     private GenerationListener generationListener;
 
-    // визуальные режимы (используется только один, по visual.mode)
-    private VisualOverlay visualOverlay;
-    private VisualParticles visualParticles;
+    // визуальные режимы (включается только один)
     private VisualFakeBlock visualFakeBlock;
+    private VisualFakeBlockProtocol visualFakeBlockProto;
 
     @Override
     public void onEnable() {
@@ -27,28 +25,27 @@ public class BedrockOresPlugin extends JavaPlugin {
         this.nodeManager = new NodeManager(this);
         nodeManager.load();
 
-        // Визуализация
+        // Визуализация (выбери один режим в config.yml: fakeblock или fakeblock_proto)
         String visMode = getConfig().getString("visual.mode", "none").toLowerCase();
         switch (visMode) {
-            case "overlay": {
-                visualOverlay = new VisualOverlay(this, nodeManager);
-                nodeManager.setOverlay(visualOverlay);
-                // после загрузки узлов — синхронизируем оверлеи (следующий тик)
-                Bukkit.getScheduler().runTask(this, visualOverlay::syncAllFromNodes);
-                break;
-            }
-            case "particles": {
-                visualParticles = new VisualParticles(this, nodeManager);
-                visualParticles.start();
-                break;
-            }
             case "fakeblock": {
                 visualFakeBlock = new VisualFakeBlock(this, nodeManager);
                 visualFakeBlock.start();
+                getLogger().info("[Visual] fakeblock mode enabled");
+                break;
+            }
+            case "fakeblock_proto": {
+                if (Bukkit.getPluginManager().getPlugin("ProtocolLib") != null) {
+                    visualFakeBlockProto = new VisualFakeBlockProtocol(this, nodeManager);
+                    visualFakeBlockProto.start();
+                    getLogger().info("[Visual] fakeblock_proto mode enabled (ProtocolLib)");
+                } else {
+                    getLogger().warning("[Visual] fakeblock_proto selected but ProtocolLib is not installed! Falling back to none.");
+                }
                 break;
             }
             default:
-                // none — ничего не включаем
+                getLogger().info("[Visual] visual.mode = none");
         }
 
         this.generationListener = new GenerationListener(this, nodeManager);
@@ -72,9 +69,8 @@ public class BedrockOresPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         try {
+            if (visualFakeBlockProto != null) visualFakeBlockProto.stop();
             if (visualFakeBlock != null) visualFakeBlock.stop();
-            if (visualParticles != null) visualParticles.stop();
-            if (visualOverlay != null) visualOverlay.cleanup();
             nodeManager.save();
         } catch (Exception e) {
             getLogger().severe("Failed to save nodes: " + e.getMessage());
