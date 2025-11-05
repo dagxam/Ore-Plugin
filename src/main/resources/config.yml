@@ -14,39 +14,27 @@ visual:
       DEEPSLATE_GOLD_ORE:    GOLD_BLOCK
       DEEPSLATE_IRON_ORE:    IRON_BLOCK
       DEEPSLATE_COAL_ORE:    COAL_BLOCK
-      DEEPSLATE_COPPER_ORE:  COPPER_BLOCK
-      ANCIENT_DEBRIS:        NETHERITE_BLOCK
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Генерация узлов: увеличенный размер кластера (кол-во блоков рядом)
 generation:
-  # Если нужно — можно ограничить высоты (иначе весь высотный диапазон мира):
+  # другие параметры генерации можно оставить пустыми — плагин возьмёт дефолты
+  cluster:
+    size-min: 10            # было меньше — теперь минимум 10
+    size-max: 20            # верхняя граница 20
+  # при необходимости можно добавить:
   # y-min: -64
   # y-max: 320
-
-  # Плотность генерации (делает «чаще/реже»)
-  chance-per-block: 0.022       # базовый шанс на кандидат-блок
-  density-multiplier: 2.3       # множитель к шансу
-
-  # Кластеры узлов
-  cluster:
-    size-min: 5                 # узел занимает 1–3 соседних блока
-    size-max: 8
-    min-spacing: 10              # мин. дистанция между кластерами по X/Z (в блоках)
-
-  # Сколько кластеров хотим на чанк
-  target-per-chunk: 18          # целевое количество
-  max-per-chunk: 30             # жёсткий максимум
-  fill-attempts-per-node: 25    # попыток добора на каждый недостающий кластер
-
-  # Сколько «ударов» нужно до исчерпания (каждый удар даёт лут)
-  min-hits: 25
-  max-hits: 100
-
-  # Очередь ленивой генерации (борьба с лагами при загрузке чанков)
+  # chance-per-block: 0.008
+  # density-multiplier: 1.0
+  # target-per-chunk: 12
+  # max-per-chunk: 24
+  # fill-attempts-per-node: 25
   queue:
     enabled: true
     chunks-per-tick: 2
-    positions-per-tick: 300
-    fill-attempts-per-tick: 180
+    positions-per-tick: 300          # зарезервировано (если логика не задействована)
+    fill-attempts-per-tick: 180      # зарезервировано
 
 fortune-enabled: true           # учитывать Fortune (упрощённая модель)
 
@@ -60,12 +48,11 @@ ore-weights:
   DEEPSLATE_LAPIS_ORE: 3
   DEEPSLATE_DIAMOND_ORE: 1
   DEEPSLATE_EMERALD_ORE: 1
-  ANCIENT_DEBRIS: 1            # древние обломки (в аду)
+  ANCIENT_DEBRIS: 1
 
-# (опционально) если хотите разные веса по мирам — раскомментируйте и настройте:
+# Можно задать отдельные веса по мирам:
 # ore-weights-overworld:
 #   DEEPSLATE_REDSTONE_ORE: 8
-#   DEEPSLATE_IRON_ORE: 6
 #   ...
 # ore-weights-nether:
 #   ANCIENT_DEBRIS: 2
