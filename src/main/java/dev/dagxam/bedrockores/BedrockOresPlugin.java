@@ -29,8 +29,12 @@ public class BedrockOresPlugin extends JavaPlugin {
         Bukkit.getPluginManager().registerEvents(generationListener, this);
         Bukkit.getPluginManager().registerEvents(new OreListeners(this, nodeManager), this);
 
+        // Сохраняем периодически и тикаем респауны
         Bukkit.getScheduler().runTaskTimer(this, nodeManager::save, 20L * 60L, 20L * 60L);
         Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
+
+        // Запустить очередь генерации, если включена
+        generationListener.startQueueIfEnabled();
 
         BedrockOresCommand cmd = new BedrockOresCommand(this, nodeManager, generationListener);
         if (getCommand("bedrockores") != null) {
@@ -44,6 +48,8 @@ public class BedrockOresPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         try {
+            // Остановить очередь генерации аккуратно
+            if (generationListener != null) generationListener.stopQueue();
             nodeManager.save();
         } catch (Exception e) {
             getLogger().severe("Failed to save nodes: " + e.getMessage());
