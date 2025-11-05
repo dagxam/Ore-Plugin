@@ -31,7 +31,7 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§e/bedrockores reload §7- перезагрузить конфиг и веса руд");
+            sender.sendMessage("§e/bedrockores reload §7- перезагрузить конфиг и генерацию (включая очередь)");
             sender.sendMessage("§e/bedrockores clearflags [мир|all] §7- очистить флаги обработанных чанков");
             sender.sendMessage("§e/bedrockores regenloaded [мир|all] §7- перегенерировать узлы в загруженных чанках");
             sender.sendMessage("§e/bedrockores restartgen [мир|all] §7- clearflags + regenloaded");
@@ -43,8 +43,8 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
         switch (sub) {
             case "reload": {
                 plugin.reloadConfig();
-                generation.reloadWeights();
-                sender.sendMessage("§aКонфиг и веса спавна перезагружены.");
+                generation.reloadSettings(); // <<< перезапускаем веса + очередь
+                sender.sendMessage("§aКонфиг и параметры генерации/очереди перезагружены.");
                 return true;
             }
             case "clearflags": {
