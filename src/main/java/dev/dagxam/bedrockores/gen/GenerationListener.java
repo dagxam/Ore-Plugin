@@ -1,6 +1,7 @@
 package dev.dagxam.bedrockores.gen;
 
 import dev.dagxam.bedrockores.node.NodeManager;
+import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -11,22 +12,51 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
 
+/**
+ * Генерация «узлов руды у бедрока».
+ * Теперь поддерживает «ленивую» очередь генерации, чтобы разгружать тики загрузки чанков.
+ */
 public class GenerationListener implements Listener {
     private final Plugin plugin;
     private final NodeManager nodeManager;
     private final Random random = new Random();
 
+    // веса руд (по конфигу)
     private Map<Material, Integer> weightsDefault = new LinkedHashMap<>();
     private Map<Material, Integer> weightsOverworld = null;
     private Map<Material, Integer> weightsNether = null;
 
+    // === Очередь генерации ===
+    private boolean queueEnabled = false;
+    private int chunksPerTick = 1;
+    // (позиции/попытки детализировано не лимитируем — используем внутренние параметры generateInChunk)
+    private final ArrayDeque<long[]> chunkQueue = new ArrayDeque<>(); // [worldUidMSB, worldUidLSB, cx, cz]
+    private final Set<String> queuedKeys = new HashSet<>();
+    private BukkitTask queueTask = null;
+
     public GenerationListener(Plugin plugin, NodeManager nodeManager) {
         this.plugin = plugin;
         this.nodeManager = nodeManager;
+        reloadSettings();
+    }
+
+    /** Перезагрузка всех настроек и весов, перезапуск очереди при необходимости. */
+    public void reloadSettings() {
+        // веса
         reloadWeights();
+
+        // очередь
+        ConfigurationSection q = plugin.getConfig().getConfigurationSection("generation.queue");
+        this.queueEnabled = q != null && q.getBoolean("enabled", false);
+        this.chunksPerTick = Math.max(1, q != null ? q.getInt("chunks-per-tick", 2) : 2);
+
+        // перезапуск фоновой задачи
+        stopQueue();
+        startQueueIfEnabled();
     }
 
     public void reloadWeights() {
@@ -51,6 +81,71 @@ public class GenerationListener implements Listener {
         }
     }
 
+    // ===== Очередь =====
+
+    public void startQueueIfEnabled() {
+        if (!queueEnabled || queueTask != null) return;
+        queueTask = Bukkit.getScheduler().runTaskTimer(plugin, this::drainQueue, 1L, 1L);
+        plugin.getLogger().info("[BedrockOres] Generation queue started: chunks-per-tick=" + chunksPerTick);
+    }
+
+    public void stopQueue() {
+        if (queueTask != null) {
+            try { queueTask.cancel(); } catch (Throwable ignored) {}
+            queueTask = null;
+        }
+        chunkQueue.clear();
+        queuedKeys.clear();
+    }
+
+    private void offerChunk(Chunk chunk) {
+        String key = chunkKey(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ());
+        if (!queuedKeys.add(key)) return;
+        UUID w = chunk.getWorld().getUID();
+        chunkQueue.add(new long[]{w.getMostSignificantBits(), w.getLeastSignificantBits(), chunk.getX(), chunk.getZ()});
+    }
+
+    private void drainQueue() {
+        if (chunkQueue.isEmpty()) return;
+
+        int budget = chunksPerTick;
+        while (budget-- > 0 && !chunkQueue.isEmpty()) {
+            long[] e = chunkQueue.poll();
+            UUID wid = new UUID(e[0], e[1]);
+            int cx = (int) e[2], cz = (int) e[3];
+
+            World world = Bukkit.getWorld(wid);
+            if (world == null) continue;
+            if (!plugin.getConfig().getStringList("enabled-worlds").contains(world.getName())) continue;
+
+            if (!world.isChunkLoaded(cx, cz)) {
+                // если чанк выгрузился — просто забудем; при повторной загрузке он вновь попадёт в очередь
+                continue;
+            }
+
+            Chunk chunk = world.getChunkAt(cx, cz);
+            // защитимся от дубля
+            String key = chunkKey(wid, cx, cz);
+            queuedKeys.remove(key);
+
+            // если уже помечен как обработанный — просто проверим респауны и пропустим
+            if (nodeManager.isChunkProcessed(world, cx, cz)) {
+                nodeManager.processDueRespawnsInChunk(chunk);
+                continue;
+            }
+
+            generateInChunk(chunk);
+            nodeManager.markChunkProcessed(world, cx, cz);
+            nodeManager.processDueRespawnsInChunk(chunk);
+        }
+    }
+
+    private static String chunkKey(UUID world, int cx, int cz) {
+        return world + ":" + cx + ":" + cz;
+    }
+
+    // ===== Веса/помощники =====
+
     private Map<Material, Integer> loadWeights(String section) {
         LinkedHashMap<Material, Integer> map = new LinkedHashMap<>();
         ConfigurationSection w = plugin.getConfig().getConfigurationSection(section);
@@ -72,6 +167,8 @@ public class GenerationListener implements Listener {
         return weightsDefault;
     }
 
+    // ===== Хуки событий =====
+
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent e) {
         World world = e.getWorld();
@@ -79,14 +176,22 @@ public class GenerationListener implements Listener {
 
         Chunk chunk = e.getChunk();
         int cx = chunk.getX(), cz = chunk.getZ();
+
+        // если уже когда-то делали — просто довозродим узлы
         if (nodeManager.isChunkProcessed(world, cx, cz)) {
             nodeManager.processDueRespawnsInChunk(chunk);
             return;
         }
 
-        generateInChunk(chunk);
-        nodeManager.markChunkProcessed(world, cx, cz);
-        nodeManager.processDueRespawnsInChunk(chunk);
+        if (queueEnabled) {
+            // «ленивый» режим — отправляем в очередь
+            offerChunk(chunk);
+        } else {
+            // старый режим — сразу генерим
+            generateInChunk(chunk);
+            nodeManager.markChunkProcessed(world, cx, cz);
+            nodeManager.processDueRespawnsInChunk(chunk);
+        }
     }
 
     // ————— Генерация строго в пределах данного чанка —————
