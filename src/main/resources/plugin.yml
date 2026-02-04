@@ -13,3 +13,5 @@ commands:
 permissions:
   bedrockores.admin:
     default: op
+  bedrockores.use:
+    default: true
