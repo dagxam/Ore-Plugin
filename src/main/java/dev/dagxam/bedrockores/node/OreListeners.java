@@ -2,6 +2,7 @@ package dev.dagxam.bedrockores.node;
 
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
@@ -34,6 +35,8 @@ import java.util.Random;
 import java.util.UUID;
 
 public class OreListeners implements Listener {
+    private static final String USE_PERMISSION = "bedrockores.use";
+
     private final Plugin plugin;
     private final NodeManager nm;
     private final Random rnd = new Random();
@@ -44,15 +47,15 @@ public class OreListeners implements Listener {
         long lastSeenNs;
         HoldSession(Location loc, long lastSeenNs) { this.loc = loc; this.lastSeenNs = lastSeenNs; }
     }
+
     private final Map<UUID, HoldSession> holds = new HashMap<>();
-    private final int holdTaskId;
 
     public OreListeners(Plugin plugin, NodeManager nm) {
         this.plugin = plugin;
         this.nm = nm;
 
         int intervalTicks = Math.max(1, plugin.getConfig().getInt("performance.hold-hit-interval-ticks", 4));
-        this.holdTaskId = Bukkit.getScheduler().runTaskTimer(plugin, this::tickHolds, intervalTicks, intervalTicks).getTaskId();
+        Bukkit.getScheduler().runTaskTimer(plugin, this::tickHolds, intervalTicks, intervalTicks);
     }
 
     // Старт удержания: клик ЛКМ по узлу (Main Hand). Лут тут НЕ выдаём.
@@ -64,9 +67,27 @@ public class OreListeners implements Listener {
         if (block == null) return;
         if (!nm.isNode(block.getLocation())) return;
 
+        Player p = e.getPlayer();
+
+        // Права: узел должен быть защищён от «ломания» без доступа.
+        if (!p.hasPermission(USE_PERMISSION)) {
+            e.setCancelled(true);
+            refreshClientBlock(block);
+            p.sendActionBar(Component.text("Нет прав: " + USE_PERMISSION));
+            return;
+        }
+
+        // Creative: чтобы не было «бесплатного фарма» из креатива
+        if (p.getGameMode() == GameMode.CREATIVE) {
+            e.setCancelled(true);
+            refreshClientBlock(block);
+            p.sendActionBar(Component.text("В CREATIVE добыча узлов отключена."));
+            return;
+        }
+
         e.setCancelled(true);
         refreshClientBlock(block);
-        startOrUpdateHold(e.getPlayer(), block.getLocation());
+        startOrUpdateHold(p, block.getLocation());
     }
 
     // Во время удержания клиент шлёт "повреждение". Тут только подтверждаем удержание.
@@ -75,10 +96,18 @@ public class OreListeners implements Listener {
         Block block = e.getBlock();
         if (!nm.isNode(block.getLocation())) return;
 
+        Player p = e.getPlayer();
+        if (!p.hasPermission(USE_PERMISSION) || p.getGameMode() == GameMode.CREATIVE) {
+            e.setCancelled(true);
+            e.setInstaBreak(false);
+            refreshClientBlock(block);
+            return;
+        }
+
         e.setCancelled(true);
         e.setInstaBreak(false);
         refreshClientBlock(block);
-        startOrUpdateHold(e.getPlayer(), block.getLocation());
+        startOrUpdateHold(p, block.getLocation());
     }
 
     // Анимация замаха руки — приходит периодически при удержании. Обновляем "я всё ещё держу".
@@ -87,6 +116,7 @@ public class OreListeners implements Listener {
         Player p = e.getPlayer();
         HoldSession hs = holds.get(p.getUniqueId());
         if (hs == null) return;
+
         // Пытаемся убедиться, что игрок всё ещё целится в тот же блок (до 6 блоков)
         Block target = p.getTargetBlockExact(6);
         if (target != null && sameBlock(hs.loc, target.getLocation())) {
@@ -94,13 +124,20 @@ public class OreListeners implements Listener {
         }
     }
 
-    // На всякий случай — попытку сломать блок всегда отменяем, без лута.
+    // На всякий случай — попытку сломать блок всегда отменяем (без лута).
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onBlockBreak(BlockBreakEvent e) {
         Block block = e.getBlock();
         if (!nm.isNode(block.getLocation())) return;
+
         e.setCancelled(true);
         refreshClientBlock(block);
+
+        // Если у игрока нет прав — явно покажем (чтобы было понятно почему «не ломается»)
+        Player p = e.getPlayer();
+        if (!p.hasPermission(USE_PERMISSION)) {
+            p.sendActionBar(Component.text("Нет прав: " + USE_PERMISSION));
+        }
     }
 
     @EventHandler
@@ -110,44 +147,50 @@ public class OreListeners implements Listener {
 
     // Периодически наносим "удары" всем, кто удерживает ЛКМ на узле
     private void tickHolds() {
-    if (holds.isEmpty()) return;
+        if (holds.isEmpty()) return;
 
-    long now = System.nanoTime();
-    long timeoutMs = plugin.getConfig().getLong("performance.hold-timeout-ms", 400L);
-    long timeoutNs = timeoutMs * 1_000_000L;
-    int budget = Math.max(1, plugin.getConfig().getInt("performance.max-hold-hits-per-tick", 60));
-    int processed = 0;
+        long now = System.nanoTime();
+        long timeoutMs = plugin.getConfig().getLong("performance.hold-timeout-ms", 400L);
+        long timeoutNs = timeoutMs * 1_000_000L;
+        int budget = Math.max(1, plugin.getConfig().getInt("performance.max-hold-hits-per-tick", 60));
+        int processed = 0;
 
-    Iterator<Map.Entry<UUID, HoldSession>> it = holds.entrySet().iterator();
-    while (it.hasNext()) {
-        if (processed >= budget) break; // бюджет исчерпан — остальное на следующий тик
+        Iterator<Map.Entry<UUID, HoldSession>> it = holds.entrySet().iterator();
+        while (it.hasNext()) {
+            if (processed >= budget) break; // бюджет исчерпан — остальное на следующий тик
 
-        Map.Entry<UUID, HoldSession> e = it.next();
-        UUID uuid = e.getKey();
-        HoldSession hs = e.getValue();
+            Map.Entry<UUID, HoldSession> e = it.next();
+            UUID uuid = e.getKey();
+            HoldSession hs = e.getValue();
 
-        Player p = Bukkit.getPlayer(uuid);
-        if (p == null || !p.isOnline()) { it.remove(); continue; }
+            Player p = Bukkit.getPlayer(uuid);
+            if (p == null || !p.isOnline()) { it.remove(); continue; }
 
-        if (now - hs.lastSeenNs > timeoutNs) {
-            it.remove(); // игрок перестал держать ЛКМ / ушёл с блока
-            continue;
+            // Права и режим — проверяем ещё раз (могли поменяться)
+            if (!p.hasPermission(USE_PERMISSION) || p.getGameMode() == GameMode.CREATIVE) {
+                it.remove();
+                continue;
+            }
+
+            if (now - hs.lastSeenNs > timeoutNs) {
+                it.remove();
+                continue;
+            }
+
+            // Узел ещё существует и чанк загружен?
+            if (!nm.isNode(hs.loc) || !hs.loc.getChunk().isLoaded()) {
+                it.remove();
+                continue;
+            }
+
+            Block block = hs.loc.getBlock();
+            NodeData nd = nm.getNode(hs.loc);
+            if (nd == null) { it.remove(); continue; }
+
+            handleHit(p, block, nd);
+            processed++;
         }
-
-        // Узел ещё существует и чанк загружен?
-        if (!nm.isNode(hs.loc) || !hs.loc.getChunk().isLoaded()) {
-            it.remove();
-            continue;
-        }
-
-        Block block = hs.loc.getBlock();
-        NodeData nd = nm.getNode(hs.loc);
-        if (nd == null) { it.remove(); continue; }
-
-        handleHit(p, block, nd);
-        processed++;
     }
-}
 
     private void startOrUpdateHold(Player p, Location loc) {
         holds.put(p.getUniqueId(), new HoldSession(loc, System.nanoTime()));
@@ -161,6 +204,7 @@ public class OreListeners implements Listener {
     }
 
     private void refreshClientBlock(Block block) {
+        // События уже в main-thread, но пусть будет безопасно (особенно если вызов из другого места)
         Bukkit.getScheduler().runTask(plugin, () -> block.getState().update(true, false));
     }
 
@@ -174,17 +218,20 @@ public class OreListeners implements Listener {
             // Планируем респаун той же руды через конфиг-делей (по умолчанию 1 час)
             nm.scheduleRespawn(block.getLocation(), nd.oreMaterial);
 
+            // Ставим BEDROCK, чтобы узел перестал существовать «физически».
+            // (Если захочешь «возврат в исходную породу» — это потребует хранить hostMaterial в NodeData.)
             block.setType(Material.BEDROCK, false);
+
             block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_ANVIL_PLACE, 0.7f, 0.8f);
             nm.removeNode(block.getLocation());
             p.sendActionBar(Component.text("Осталось ударов: 0/" + nd.maxHits));
         } else {
             block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_STONE_HIT, 0.8f, 1.0f);
             block.getWorld().spawnParticle(
-                Particle.BLOCK,
-                block.getLocation().add(0.5, 0.5, 0.5),
-                12, 0.3, 0.3, 0.3, 0.0,
-                block.getBlockData()
+                    Particle.BLOCK,
+                    block.getLocation().add(0.5, 0.5, 0.5),
+                    12, 0.3, 0.3, 0.3, 0.0,
+                    block.getBlockData()
             );
             showProgress(p, block.getLocation(), nd);
         }
@@ -213,7 +260,7 @@ public class OreListeners implements Listener {
 
         boolean directInv = plugin.getConfig().getBoolean("performance.direct-item-to-inventory", true);
         if (directInv) {
-            var leftover = p.getInventory().addItem(drop);
+            Map<Integer, ItemStack> leftover = p.getInventory().addItem(drop);
             if (!leftover.isEmpty()) {
                 for (ItemStack rest : leftover.values()) {
                     block.getWorld().dropItemNaturally(block.getLocation().add(0.5, 0.5, 0.5), rest);
