@@ -14,10 +14,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * Главный класс плагина BedrockOres.
  *
- * ВАЖНО ПРО ПЕРИОДИЧЕСКОЕ СОХРАНЕНИЕ:
- * - YAML-сериализация делается в async (чтобы не лагать основной тред).
- * - Но «снимок» данных берётся синхронно (в main thread), иначе возможны
- *   ConcurrentModificationException и/или частично неконсистентные данные.
+ * ВАЖНО ПРО СОХРАНЕНИЕ:
+ * - YAML-запись можно делать async,
+ * - но «снимок» данных должен сниматься синхронно (main thread), иначе HashMap может меняться параллельно.
  */
 public class BedrockOresPlugin extends JavaPlugin {
 
@@ -50,12 +49,11 @@ public class BedrockOresPlugin extends JavaPlugin {
                 this,
                 () -> {
                     try {
-                        Future<NodeManager.SaveSnapshot> f = Bukkit.getScheduler()
-                                .callSyncMethod(this, nodeManager::createSnapshot);
+                        Future<NodeManager.SaveSnapshot> f =
+                                Bukkit.getScheduler().callSyncMethod(this, nodeManager::createSnapshot);
 
-                        // Снимок обычно делается быстро; чтобы не зависнуть на shutdown/лаг-спайках — ограничиваем ожидание.
                         NodeManager.SaveSnapshot snap = f.get(2, TimeUnit.SECONDS);
-                        nodeManager.saveSnapshot(snap); // чисто файловая запись/сериализация — можно async
+                        nodeManager.saveSnapshot(snap);
                     } catch (Exception e) {
                         getLogger().severe("Async save failed: " + e.getMessage());
                     }
@@ -64,7 +62,7 @@ public class BedrockOresPlugin extends JavaPlugin {
                 20L * saveSeconds
         );
 
-        // Тик респаунов (синхронно, т.к. трогает мир/чанки)
+        // Тик респаунов (синхронно)
         respawnTickTask = Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
 
         // Генерация: очередь, если включена конфигом
@@ -76,7 +74,7 @@ public class BedrockOresPlugin extends JavaPlugin {
             getCommand("bedrockores").setTabCompleter(cmd);
         }
 
-        getLogger().info("BedrockOres enabled (snapshot-based async persistence, queue-aware generation).");
+        getLogger().info("BedrockOres enabled (safe snapshot async persistence, optimized generation).");
     }
 
     @Override
@@ -86,8 +84,7 @@ public class BedrockOresPlugin extends JavaPlugin {
             if (respawnTickTask != null) respawnTickTask.cancel();
             if (generationListener != null) generationListener.stopQueue();
 
-            // Финальный save — синхронно, чтобы гарантировать запись перед выключением
-            nodeManager.save();
+            nodeManager.save(); // финально синхронно
         } catch (Exception e) {
             getLogger().severe("Failed to save nodes: " + e.getMessage());
         }
