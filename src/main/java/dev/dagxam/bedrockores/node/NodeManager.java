@@ -17,16 +17,15 @@ public class NodeManager {
     private final Plugin plugin;
     private final Random rnd = new Random();
 
-    // Активные узлы: key(worldUUID:x:y:z) -> NodeData
     private final Map<String, NodeData> nodes = new HashMap<>();
-    // Обработанные чанки
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
-    // Очередь респаунов
     private final Map<String, RespawnData> respawns = new HashMap<>();
-    // Индекс узлов по чанкам
     private final Map<UUID, Map<Long, List<Location>>> nodesByChunk = new HashMap<>();
 
     private final File dataFile;
+
+    // анти-спам в лог: запоминаем уже предупреждённые материалы
+    private final Set<String> warnedDisplayMaterials = new HashSet<>();
 
     public NodeManager(Plugin plugin) {
         this.plugin = plugin;
@@ -45,7 +44,7 @@ public class NodeManager {
         return (((long) cx) << 32) ^ (cz & 0xffffffffL);
     }
 
-    /** Быстрая проверка без new Location (важно для производительности генерации). */
+    /** Быстрая проверка без new Location (важно для генерации). */
     public boolean isNode(UUID worldId, int x, int y, int z) {
         return nodes.containsKey(key(worldId, x, y, z));
     }
@@ -54,17 +53,32 @@ public class NodeManager {
 
     public NodeData getNode(Location loc) { return nodes.get(key(loc)); }
 
-    // Добавить узел
+    /**
+     * Добавить узел.
+     *
+     * Важно про NETHERITE_SCRAP:
+     * - в конфиге можно указать вес NETHERITE_SCRAP
+     * - но это не блок, поэтому физически в мире ставим ANCIENT_DEBRIS
+     * - в NodeData сохраняем именно NETHERITE_SCRAP, чтобы дропался scrap
+     */
     public void addNode(Location loc, Material oreMaterial, int hits) {
         int max = hits;
+
+        // если "руда" = NETHERITE_SCRAP, то базовый блок в мире = ANCIENT_DEBRIS
+        Material baseBlock = oreMaterial;
+        if (oreMaterial == Material.NETHERITE_SCRAP) {
+            baseBlock = Material.ANCIENT_DEBRIS;
+        }
+
         NodeData nd = new NodeData(oreMaterial, hits, max);
         nodes.put(key(loc), nd);
 
-        Material toPlace = oreMaterial;
+        Material toPlace = baseBlock;
         if (serverSolidEnabled()) {
             Material disp = displayFor(oreMaterial);
             if (disp != null) toPlace = disp;
         }
+
         loc.getBlock().setType(toPlace, false);
         indexAdd(loc);
     }
@@ -86,7 +100,6 @@ public class NodeManager {
 
     public void clearAllProcessedFlags() { processedChunks.clear(); }
 
-    // Удалить узлы в чанке
     public int removeNodesInChunk(Chunk chunk) {
         UUID wid = chunk.getWorld().getUID();
         int cx = chunk.getX(), cz = chunk.getZ();
@@ -113,7 +126,6 @@ public class NodeManager {
         return count;
     }
 
-    // Удалить респауны в чанке
     public int removeRespawnsInChunk(Chunk chunk) {
         UUID wid = chunk.getWorld().getUID();
         int cx = chunk.getX(), cz = chunk.getZ();
@@ -137,21 +149,17 @@ public class NodeManager {
         return count;
     }
 
-    // Запланировать респаун узла
     public void scheduleRespawn(Location loc, Material oreType) {
         if (!plugin.getConfig().getBoolean("respawn.enabled", true)) return;
         long delaySec = plugin.getConfig().getLong("respawn.delay-seconds", 3600L);
         long due = System.currentTimeMillis() + delaySec * 1000L;
         respawns.put(key(loc), new RespawnData(oreType, due));
 
-        // ВАЖНО: не сохраняем файл каждый раз (это лаги при добыче).
-        // Если нужно — можно включить принудительное сохранение:
         if (plugin.getConfig().getBoolean("persistence.save-on-respawn-schedule", false)) {
             save();
         }
     }
 
-    // Тик респаунов
     public void tickRespawns() {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
@@ -171,7 +179,6 @@ public class NodeManager {
             done.add(e.getKey());
         }
         for (String k : done) respawns.remove(k);
-        // save() не дергаем каждый тик — есть периодический snapshot-save
     }
 
     public void processDueRespawnsInChunk(Chunk chunk) {
@@ -282,81 +289,46 @@ public class NodeManager {
         plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processed worlds=" + processedChunks.size());
     }
 
-    public record NodeEntry(UUID world, int x, int y, int z, Material type, int hits, int maxHits) {}
-    public record RespawnEntry(UUID world, int x, int y, int z, Material type, long dueAtMillis) {}
-    public record SaveSnapshot(List<NodeEntry> nodes,
-                               Map<UUID, List<String>> processedChunks,
-                               List<RespawnEntry> respawns) {}
+    public void save() {
+        YamlConfiguration yml = new YamlConfiguration();
 
-    /** СНИМОК (только main thread). */
-    public SaveSnapshot createSnapshot() {
-        List<NodeEntry> nodeList = new ArrayList<>(nodes.size());
+        int i = 0;
         for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
             String[] parts = e.getKey().split(":");
             if (parts.length != 4) continue;
-            UUID world = UUID.fromString(parts[0]);
-            int x = Integer.parseInt(parts[1]);
-            int y = Integer.parseInt(parts[2]);
-            int z = Integer.parseInt(parts[3]);
-            NodeData nd = e.getValue();
-            nodeList.add(new NodeEntry(world, x, y, z, nd.oreMaterial, nd.hitsRemaining, nd.maxHits));
+            String path = "nodes.n" + (i++);
+
+            yml.set(path + ".world", parts[0]);
+            yml.set(path + ".x", Integer.parseInt(parts[1]));
+            yml.set(path + ".y", Integer.parseInt(parts[2]));
+            yml.set(path + ".z", Integer.parseInt(parts[3]));
+            yml.set(path + ".type", e.getValue().oreMaterial.name());
+            yml.set(path + ".hits", e.getValue().hitsRemaining);
+            yml.set(path + ".maxHits", e.getValue().maxHits);
         }
 
-        Map<UUID, List<String>> processed = new HashMap<>();
         for (Map.Entry<UUID, Set<Long>> e : processedChunks.entrySet()) {
-            List<String> list = new ArrayList<>(e.getValue().size());
+            List<String> list = new ArrayList<>();
             for (Long ck : e.getValue()) {
                 int cx = (int) (ck >> 32);
                 int cz = (int) (ck & 0xffffffffL);
                 list.add(cx + ":" + cz);
             }
-            processed.put(e.getKey(), list);
-        }
-
-        List<RespawnEntry> respawnList = new ArrayList<>(respawns.size());
-        for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
-            String[] parts = e.getKey().split(":");
-            if (parts.length != 4) continue;
-            UUID world = UUID.fromString(parts[0]);
-            int x = Integer.parseInt(parts[1]);
-            int y = Integer.parseInt(parts[2]);
-            int z = Integer.parseInt(parts[3]);
-            RespawnData rd = e.getValue();
-            respawnList.add(new RespawnEntry(world, x, y, z, rd.oreMaterial, rd.dueAtMillis));
-        }
-
-        return new SaveSnapshot(nodeList, processed, respawnList);
-    }
-
-    /** Пишем snapshot в файл (можно async). */
-    public void saveSnapshot(SaveSnapshot snapshot) {
-        YamlConfiguration yml = new YamlConfiguration();
-
-        int i = 0;
-        for (NodeEntry n : snapshot.nodes()) {
-            String path = "nodes.n" + (i++);
-            yml.set(path + ".world", n.world().toString());
-            yml.set(path + ".x", n.x());
-            yml.set(path + ".y", n.y());
-            yml.set(path + ".z", n.z());
-            yml.set(path + ".type", n.type().name());
-            yml.set(path + ".hits", n.hits());
-            yml.set(path + ".maxHits", n.maxHits());
-        }
-
-        for (Map.Entry<UUID, List<String>> e : snapshot.processedChunks().entrySet()) {
-            yml.set("processedChunks." + e.getKey().toString(), e.getValue());
+            yml.set("processedChunks." + e.getKey().toString(), list);
         }
 
         int r = 0;
-        for (RespawnEntry rd : snapshot.respawns()) {
+        for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
+            String[] parts = e.getKey().split(":");
+            if (parts.length != 4) continue;
             String path = "respawns.r" + (r++);
-            yml.set(path + ".world", rd.world().toString());
-            yml.set(path + ".x", rd.x());
-            yml.set(path + ".y", rd.y());
-            yml.set(path + ".z", rd.z());
-            yml.set(path + ".type", rd.type().name());
-            yml.set(path + ".dueAt", rd.dueAtMillis());
+
+            yml.set(path + ".world", parts[0]);
+            yml.set(path + ".x", Integer.parseInt(parts[1]));
+            yml.set(path + ".y", Integer.parseInt(parts[2]));
+            yml.set(path + ".z", Integer.parseInt(parts[3]));
+            yml.set(path + ".type", e.getValue().oreMaterial.name());
+            yml.set(path + ".dueAt", e.getValue().dueAtMillis);
         }
 
         try {
@@ -364,10 +336,6 @@ public class NodeManager {
         } catch (IOException ex) {
             plugin.getLogger().severe("Failed to save nodes.yml: " + ex.getMessage());
         }
-    }
-
-    public void save() {
-        saveSnapshot(createSnapshot());
     }
 
     // ===== Index =====
@@ -409,7 +377,7 @@ public class NodeManager {
         return nodesByChunk.getOrDefault(wid, Collections.emptyMap()).getOrDefault(ck, Collections.emptyList());
     }
 
-    // ===== Config helpers =====
+    // ===== Helpers =====
 
     public int randomHits() {
         int min = plugin.getConfig().getInt("node.hits-min", 3);
@@ -422,18 +390,57 @@ public class NodeManager {
         return plugin.getConfig().getBoolean("visual.server-solid.enabled", false);
     }
 
+    /**
+     * АНТИ-ЦВЕТЫ:
+     * Разрешаем в map только "полные" твердые блоки.
+     * Цветы, факелы, таблички, вода, воздух и т.п. будут проигнорированы (вернём null).
+     */
     private Material displayFor(Material ore) {
         String key = "visual.server-solid.map." + ore.name();
         String name = plugin.getConfig().getString(key);
         if (name == null || name.isBlank()) return null;
+
+        Material m;
         try {
-            return Material.valueOf(name.toUpperCase(Locale.ROOT));
+            m = Material.valueOf(name.toUpperCase(Locale.ROOT));
         } catch (Exception e) {
+            warnOnce("invalid:" + ore.name() + "->" + name,
+                    "[BedrockOres] Invalid visual mapping: " + ore.name() + " -> " + name);
             return null;
+        }
+
+        // только блоки
+        if (!m.isBlock()) {
+            warnOnce("nonblock:" + ore.name() + "->" + m.name(),
+                    "[BedrockOres] Blocked visual mapping (not a block): " + ore.name() + " -> " + m);
+            return null;
+        }
+
+        // только "твердые" блоки
+        if (!m.isSolid()) {
+            warnOnce("nonsolid:" + ore.name() + "->" + m.name(),
+                    "[BedrockOres] Blocked visual mapping (not solid): " + ore.name() + " -> " + m +
+                    " (flowers/torches/etc are not allowed)");
+            return null;
+        }
+
+        // и ещё: нельзя воздух
+        if (m.isAir()) {
+            warnOnce("air:" + ore.name() + "->" + m.name(),
+                    "[BedrockOres] Blocked visual mapping (air): " + ore.name() + " -> " + m);
+            return null;
+        }
+
+        return m;
+    }
+
+    private void warnOnce(String key, String msg) {
+        if (warnedDisplayMaterials.add(key)) {
+            plugin.getLogger().warning(msg);
         }
     }
 
-    // Для совместимости с командой
+    // Для совместимости с BedrockOresCommand
     public int applyServerVisualsInWorld(World world, boolean enable) {
         if (world == null) return 0;
 
@@ -453,9 +460,12 @@ public class NodeManager {
             Location loc = locationFromKey(e.getKey());
             if (loc == null) continue;
 
-            Material target = e.getValue().oreMaterial;
+            Material oreMaterial = e.getValue().oreMaterial;
+            Material baseBlock = oreMaterial == Material.NETHERITE_SCRAP ? Material.ANCIENT_DEBRIS : oreMaterial;
+
+            Material target = baseBlock;
             if (enable) {
-                Material disp = displayFor(e.getValue().oreMaterial);
+                Material disp = displayFor(oreMaterial);
                 if (disp != null) target = disp;
             }
 
@@ -479,9 +489,12 @@ public class NodeManager {
             if (loc == null) continue;
             if (loc.getWorld() == null) continue;
 
-            Material target = e.getValue().oreMaterial;
+            Material oreMaterial = e.getValue().oreMaterial;
+            Material baseBlock = oreMaterial == Material.NETHERITE_SCRAP ? Material.ANCIENT_DEBRIS : oreMaterial;
+
+            Material target = baseBlock;
             if (enabled) {
-                Material disp = displayFor(e.getValue().oreMaterial);
+                Material disp = displayFor(oreMaterial);
                 if (disp != null) target = disp;
             }
 
