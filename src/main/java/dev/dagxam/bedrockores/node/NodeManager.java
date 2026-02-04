@@ -17,14 +17,18 @@ public class NodeManager {
     private final Plugin plugin;
     private final Random rnd = new Random();
 
+    // Активные узлы: key(worldUUID:x:y:z) -> NodeData
     private final Map<String, NodeData> nodes = new HashMap<>();
+    // Обработанные чанки (чтобы не генерировать повторно)
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
+    // Очередь респаунов
     private final Map<String, RespawnData> respawns = new HashMap<>();
+    // Индекс узлов по чанкам
     private final Map<UUID, Map<Long, List<Location>>> nodesByChunk = new HashMap<>();
 
     private final File dataFile;
 
-    // анти-спам в лог: запоминаем уже предупреждённые материалы
+    // анти-спам в лог: запоминаем уже предупреждённые ключи
     private final Set<String> warnedDisplayMaterials = new HashSet<>();
 
     public NodeManager(Plugin plugin) {
@@ -56,15 +60,13 @@ public class NodeManager {
     /**
      * Добавить узел.
      *
-     * Важно про NETHERITE_SCRAP:
-     * - в конфиге можно указать вес NETHERITE_SCRAP
-     * - но это не блок, поэтому физически в мире ставим ANCIENT_DEBRIS
-     * - в NodeData сохраняем именно NETHERITE_SCRAP, чтобы дропался scrap
+     * NETHERITE_SCRAP — виртуальный “тип узла”:
+     * - в NodeData храним NETHERITE_SCRAP, чтобы дропался scrap
+     * - в мире физически ставим ANCIENT_DEBRIS
      */
     public void addNode(Location loc, Material oreMaterial, int hits) {
         int max = hits;
 
-        // если "руда" = NETHERITE_SCRAP, то базовый блок в мире = ANCIENT_DEBRIS
         Material baseBlock = oreMaterial;
         if (oreMaterial == Material.NETHERITE_SCRAP) {
             baseBlock = Material.ANCIENT_DEBRIS;
@@ -110,7 +112,11 @@ public class NodeManager {
             Map.Entry<String, NodeData> e = it.next();
             String[] p = e.getKey().split(":");
             if (p.length != 4) continue;
-            UUID w = UUID.fromString(p[0]);
+
+            UUID w;
+            try { w = UUID.fromString(p[0]); }
+            catch (Exception ex) { continue; }
+
             if (!w.equals(wid)) continue;
 
             int x = Integer.parseInt(p[1]);
@@ -136,7 +142,11 @@ public class NodeManager {
             Map.Entry<String, RespawnData> e = it.next();
             String[] p = e.getKey().split(":");
             if (p.length != 4) continue;
-            UUID w = UUID.fromString(p[0]);
+
+            UUID w;
+            try { w = UUID.fromString(p[0]); }
+            catch (Exception ex) { continue; }
+
             if (!w.equals(wid)) continue;
 
             int x = Integer.parseInt(p[1]);
@@ -191,7 +201,11 @@ public class NodeManager {
         for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
             String[] p = e.getKey().split(":");
             if (p.length != 4) continue;
-            UUID w = UUID.fromString(p[0]);
+
+            UUID w;
+            try { w = UUID.fromString(p[0]); }
+            catch (Exception ex) { continue; }
+
             if (!w.equals(wid)) continue;
 
             int x = Integer.parseInt(p[1]);
@@ -225,7 +239,7 @@ public class NodeManager {
         }
     }
 
-    // ===== Load/Save =====
+    // ===== LOAD =====
 
     public void load() {
         if (!dataFile.exists()) return;
@@ -289,46 +303,83 @@ public class NodeManager {
         plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processed worlds=" + processedChunks.size());
     }
 
-    public void save() {
-        YamlConfiguration yml = new YamlConfiguration();
+    // ===== SNAPSHOT API (для BedrockOresPlugin) =====
 
-        int i = 0;
+    public record NodeEntry(UUID world, int x, int y, int z, Material type, int hits, int maxHits) {}
+    public record RespawnEntry(UUID world, int x, int y, int z, Material type, long dueAtMillis) {}
+    public record SaveSnapshot(List<NodeEntry> nodes,
+                               Map<UUID, List<String>> processedChunks,
+                               List<RespawnEntry> respawns) {}
+
+    /** Создать snapshot. Должен вызываться синхронно (main thread), если параллельно идут ивенты. */
+    public SaveSnapshot createSnapshot() {
+        List<NodeEntry> nodeList = new ArrayList<>(nodes.size());
         for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
             String[] parts = e.getKey().split(":");
             if (parts.length != 4) continue;
-            String path = "nodes.n" + (i++);
-
-            yml.set(path + ".world", parts[0]);
-            yml.set(path + ".x", Integer.parseInt(parts[1]));
-            yml.set(path + ".y", Integer.parseInt(parts[2]));
-            yml.set(path + ".z", Integer.parseInt(parts[3]));
-            yml.set(path + ".type", e.getValue().oreMaterial.name());
-            yml.set(path + ".hits", e.getValue().hitsRemaining);
-            yml.set(path + ".maxHits", e.getValue().maxHits);
+            UUID world = UUID.fromString(parts[0]);
+            int x = Integer.parseInt(parts[1]);
+            int y = Integer.parseInt(parts[2]);
+            int z = Integer.parseInt(parts[3]);
+            NodeData nd = e.getValue();
+            nodeList.add(new NodeEntry(world, x, y, z, nd.oreMaterial, nd.hitsRemaining, nd.maxHits));
         }
 
+        Map<UUID, List<String>> processed = new HashMap<>();
         for (Map.Entry<UUID, Set<Long>> e : processedChunks.entrySet()) {
-            List<String> list = new ArrayList<>();
+            List<String> list = new ArrayList<>(e.getValue().size());
             for (Long ck : e.getValue()) {
                 int cx = (int) (ck >> 32);
                 int cz = (int) (ck & 0xffffffffL);
                 list.add(cx + ":" + cz);
             }
-            yml.set("processedChunks." + e.getKey().toString(), list);
+            processed.put(e.getKey(), list);
         }
 
-        int r = 0;
+        List<RespawnEntry> respawnList = new ArrayList<>(respawns.size());
         for (Map.Entry<String, RespawnData> e : respawns.entrySet()) {
             String[] parts = e.getKey().split(":");
             if (parts.length != 4) continue;
-            String path = "respawns.r" + (r++);
+            UUID world = UUID.fromString(parts[0]);
+            int x = Integer.parseInt(parts[1]);
+            int y = Integer.parseInt(parts[2]);
+            int z = Integer.parseInt(parts[3]);
+            RespawnData rd = e.getValue();
+            respawnList.add(new RespawnEntry(world, x, y, z, rd.oreMaterial, rd.dueAtMillis));
+        }
 
-            yml.set(path + ".world", parts[0]);
-            yml.set(path + ".x", Integer.parseInt(parts[1]));
-            yml.set(path + ".y", Integer.parseInt(parts[2]));
-            yml.set(path + ".z", Integer.parseInt(parts[3]));
-            yml.set(path + ".type", e.getValue().oreMaterial.name());
-            yml.set(path + ".dueAt", e.getValue().dueAtMillis);
+        return new SaveSnapshot(nodeList, processed, respawnList);
+    }
+
+    /** Записать snapshot в nodes.yml (можно вызывать async). */
+    public void saveSnapshot(SaveSnapshot snapshot) {
+        YamlConfiguration yml = new YamlConfiguration();
+
+        int i = 0;
+        for (NodeEntry n : snapshot.nodes()) {
+            String path = "nodes.n" + (i++);
+            yml.set(path + ".world", n.world().toString());
+            yml.set(path + ".x", n.x());
+            yml.set(path + ".y", n.y());
+            yml.set(path + ".z", n.z());
+            yml.set(path + ".type", n.type().name());
+            yml.set(path + ".hits", n.hits());
+            yml.set(path + ".maxHits", n.maxHits());
+        }
+
+        for (Map.Entry<UUID, List<String>> e : snapshot.processedChunks().entrySet()) {
+            yml.set("processedChunks." + e.getKey().toString(), e.getValue());
+        }
+
+        int r = 0;
+        for (RespawnEntry rd : snapshot.respawns()) {
+            String path = "respawns.r" + (r++);
+            yml.set(path + ".world", rd.world().toString());
+            yml.set(path + ".x", rd.x());
+            yml.set(path + ".y", rd.y());
+            yml.set(path + ".z", rd.z());
+            yml.set(path + ".type", rd.type().name());
+            yml.set(path + ".dueAt", rd.dueAtMillis());
         }
 
         try {
@@ -338,7 +389,12 @@ public class NodeManager {
         }
     }
 
-    // ===== Index =====
+    /** Синхронный save (обычно onDisable). */
+    public void save() {
+        saveSnapshot(createSnapshot());
+    }
+
+    // ===== INDEX =====
 
     private void rebuildIndex() {
         nodesByChunk.clear();
@@ -377,7 +433,7 @@ public class NodeManager {
         return nodesByChunk.getOrDefault(wid, Collections.emptyMap()).getOrDefault(ck, Collections.emptyList());
     }
 
-    // ===== Helpers =====
+    // ===== HELPERS =====
 
     public int randomHits() {
         int min = plugin.getConfig().getInt("node.hits-min", 3);
@@ -392,8 +448,8 @@ public class NodeManager {
 
     /**
      * АНТИ-ЦВЕТЫ:
-     * Разрешаем в map только "полные" твердые блоки.
-     * Цветы, факелы, таблички, вода, воздух и т.п. будут проигнорированы (вернём null).
+     * Разрешаем в server-solid.map только "полные" твердые блоки.
+     * Цветы/факелы/вода/воздух и т.п. будут проигнорированы (вернём null) + warning.
      */
     private Material displayFor(Material ore) {
         String key = "visual.server-solid.map." + ore.name();
@@ -409,25 +465,22 @@ public class NodeManager {
             return null;
         }
 
-        // только блоки
         if (!m.isBlock()) {
             warnOnce("nonblock:" + ore.name() + "->" + m.name(),
                     "[BedrockOres] Blocked visual mapping (not a block): " + ore.name() + " -> " + m);
             return null;
         }
 
-        // только "твердые" блоки
-        if (!m.isSolid()) {
-            warnOnce("nonsolid:" + ore.name() + "->" + m.name(),
-                    "[BedrockOres] Blocked visual mapping (not solid): " + ore.name() + " -> " + m +
-                    " (flowers/torches/etc are not allowed)");
-            return null;
-        }
-
-        // и ещё: нельзя воздух
         if (m.isAir()) {
             warnOnce("air:" + ore.name() + "->" + m.name(),
                     "[BedrockOres] Blocked visual mapping (air): " + ore.name() + " -> " + m);
+            return null;
+        }
+
+        if (!m.isSolid()) {
+            warnOnce("nonsolid:" + ore.name() + "->" + m.name(),
+                    "[BedrockOres] Blocked visual mapping (not solid): " + ore.name() + " -> " + m +
+                            " (flowers/torches/etc are not allowed)");
             return null;
         }
 
