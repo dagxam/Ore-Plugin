@@ -18,7 +18,7 @@ import java.util.*;
 
 /**
  * Генерация «узлов руды у бедрока».
- * Теперь поддерживает «ленивую» очередь генерации, чтобы разгружать тики загрузки чанков.
+ * Поддерживает «ленивую» очередь генерации, чтобы разгружать тики загрузки чанков.
  */
 public class GenerationListener implements Listener {
     private final Plugin plugin;
@@ -33,7 +33,8 @@ public class GenerationListener implements Listener {
     // === Очередь генерации ===
     private boolean queueEnabled = false;
     private int chunksPerTick = 1;
-    // (позиции/попытки детализировано не лимитируем — используем внутренние параметры generateInChunk)
+
+    // Храним очередь как примитивы, чтобы не держать Chunk-объекты
     private final ArrayDeque<long[]> chunkQueue = new ArrayDeque<>(); // [worldUidMSB, worldUidLSB, cx, cz]
     private final Set<String> queuedKeys = new HashSet<>();
     private BukkitTask queueTask = null;
@@ -46,15 +47,12 @@ public class GenerationListener implements Listener {
 
     /** Перезагрузка всех настроек и весов, перезапуск очереди при необходимости. */
     public void reloadSettings() {
-        // веса
         reloadWeights();
 
-        // очередь
         ConfigurationSection q = plugin.getConfig().getConfigurationSection("generation.queue");
         this.queueEnabled = q != null && q.getBoolean("enabled", false);
         this.chunksPerTick = Math.max(1, q != null ? q.getInt("chunks-per-tick", 2) : 2);
 
-        // перезапуск фоновой задачи
         stopQueue();
         startQueueIfEnabled();
     }
@@ -101,10 +99,19 @@ public class GenerationListener implements Listener {
     private void offerChunk(Chunk chunk) {
         String key = chunkKey(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ());
         if (!queuedKeys.add(key)) return;
+
         UUID w = chunk.getWorld().getUID();
         chunkQueue.add(new long[]{w.getMostSignificantBits(), w.getLeastSignificantBits(), chunk.getX(), chunk.getZ()});
     }
 
+    /**
+     * ВАЖНО: тут был логический баг.
+     * Если чанк успевал выгрузиться между offerChunk() и drainQueue(), код делал continue
+     * ДО удаления ключа из queuedKeys — из-за этого чанк больше никогда не попадал в очередь
+     * (до рестарта), и узлы могли вообще не сгенерироваться.
+     *
+     * Фикс: снимаем queuedKeys сразу после poll(), вне зависимости от дальнейших continue.
+     */
     private void drainQueue() {
         if (chunkQueue.isEmpty()) return;
 
@@ -113,6 +120,10 @@ public class GenerationListener implements Listener {
             long[] e = chunkQueue.poll();
             UUID wid = new UUID(e[0], e[1]);
             int cx = (int) e[2], cz = (int) e[3];
+
+            // снимаем «занято» сразу, иначе при continue ключ зависнет навсегда
+            String qKey = chunkKey(wid, cx, cz);
+            queuedKeys.remove(qKey);
 
             World world = Bukkit.getWorld(wid);
             if (world == null) continue;
@@ -124,9 +135,6 @@ public class GenerationListener implements Listener {
             }
 
             Chunk chunk = world.getChunkAt(cx, cz);
-            // защитимся от дубля
-            String key = chunkKey(wid, cx, cz);
-            queuedKeys.remove(key);
 
             // если уже помечен как обработанный — просто проверим респауны и пропустим
             if (nodeManager.isChunkProcessed(world, cx, cz)) {
@@ -184,10 +192,8 @@ public class GenerationListener implements Listener {
         }
 
         if (queueEnabled) {
-            // «ленивый» режим — отправляем в очередь
             offerChunk(chunk);
         } else {
-            // старый режим — сразу генерим
             generateInChunk(chunk);
             nodeManager.markChunkProcessed(world, cx, cz);
             nodeManager.processDueRespawnsInChunk(chunk);
@@ -240,7 +246,7 @@ public class GenerationListener implements Listener {
                     int z = baseZ + lz;
 
                     Material host = fastType(chunk, x, y, z);
-                    if (host == null) continue;               // вышли за границы чанка — пропускаем
+                    if (host == null) continue;
                     if (!isReplaceable(host, world)) continue;
 
                     if (!farEnoughFromLocal2D(placedCentersLocal, x, z, spacing2)) continue;
@@ -296,19 +302,16 @@ public class GenerationListener implements Listener {
     }
 
     private boolean isReplaceable(Material m, World w) {
-        // Оверворлд
         if (w.getEnvironment() == Environment.NORMAL) {
             if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
             String n = m.name();
             if (n.endsWith("_STONE") || n.endsWith("ANDESITE") || n.endsWith("DIORITE") || n.endsWith("GRANITE")) return true;
             return false;
         }
-        // Ад
         if (w.getEnvironment() == Environment.NETHER) {
             return (m == Material.NETHERRACK || m == Material.BASALT || m == Material.BLACKSTONE);
         }
-        // Прочее (Энд) — по умолчанию отключено (можно добавить при необходимости)
-        return false;
+        return false; // END/прочее по умолчанию не генерим
     }
 
     private boolean farEnoughFromLocal2D(List<int[]> centers, int x, int z, int spacing2) {
@@ -320,7 +323,6 @@ public class GenerationListener implements Listener {
         return true;
     }
 
-    // Проверяем существующие узлы (наши) поблизости (малый радиус по Y)
     private boolean farEnoughFromExistingNodes2D(World w, int x, int y, int z, int spacing, int spacing2) {
         for (int dy = -2; dy <= 2; dy++) {
             int yy = y + dy;
@@ -335,7 +337,6 @@ public class GenerationListener implements Listener {
         return true;
     }
 
-    // Кластер растём только внутри текущего чанка — никаких выходов в соседние
     private boolean tryPlaceCluster(Chunk chunk,
                                     int cx, int cy, int cz,
                                     Material ore,
@@ -344,7 +345,7 @@ public class GenerationListener implements Listener {
                                     int minSpacing, int spacing2) {
 
         World world = chunk.getWorld();
-        if (fastType(chunk, cx, cy, cz) == null) return false;           // за пределами чанка
+        if (fastType(chunk, cx, cy, cz) == null) return false;
         if (!isReplaceable(fastType(chunk, cx, cy, cz), world)) return false;
 
         int size = clusterMin + random.nextInt(clusterMax - clusterMin + 1);
@@ -362,7 +363,6 @@ public class GenerationListener implements Listener {
                 int nx = bx + d[0], ny = by + d[1], nz = bz + d[2];
                 if (ny < minY || ny > maxY) continue;
 
-                // Только текущий чанк!
                 if (fastType(chunk, nx, ny, nz) == null) continue;
 
                 Material host = fastType(chunk, nx, ny, nz);
@@ -387,7 +387,7 @@ public class GenerationListener implements Listener {
 
     private Material rollOre(Map<Material, Integer> weights, World world) {
         if (weights == null || weights.isEmpty()) return null;
-        // Небольшая защита: ANCIENT_DEBRIS только в аду
+
         int total = 0;
         for (Map.Entry<Material, Integer> e : weights.entrySet()) {
             if (e.getKey() == Material.ANCIENT_DEBRIS && world.getEnvironment() != Environment.NETHER) continue;
