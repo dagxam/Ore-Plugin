@@ -11,13 +11,6 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Главный класс плагина BedrockOres.
- *
- * ВАЖНО ПРО СОХРАНЕНИЕ:
- * - YAML-запись можно делать async,
- * - но «снимок» данных должен сниматься синхронно (main thread), иначе HashMap может меняться параллельно.
- */
 public class BedrockOresPlugin extends JavaPlugin {
 
     private NodeManager nodeManager;
@@ -33,7 +26,7 @@ public class BedrockOresPlugin extends JavaPlugin {
         this.nodeManager = new NodeManager(this);
         nodeManager.load();
 
-        // Визуалы «цельных блоков» (если включены)
+        // применить визуалы (если включены)
         if (getConfig().getBoolean("visual.server-solid.enabled", false)) {
             int applied = nodeManager.applyServerVisualsForAllNodes(true);
             getLogger().info("Server-solid visuals applied to nodes: " + applied);
@@ -43,7 +36,7 @@ public class BedrockOresPlugin extends JavaPlugin {
         Bukkit.getPluginManager().registerEvents(generationListener, this);
         Bukkit.getPluginManager().registerEvents(new OreListeners(this, nodeManager), this);
 
-        // Периодическое сохранение: snapshot синхронно, запись async
+        // периодическое сохранение: snapshot синхронно, запись async
         long saveSeconds = Math.max(30L, getConfig().getLong("persistence.save-interval-seconds", 180L));
         asyncSaveTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this,
@@ -62,10 +55,10 @@ public class BedrockOresPlugin extends JavaPlugin {
                 20L * saveSeconds
         );
 
-        // Тик респаунов (синхронно)
+        // тик респаунов
         respawnTickTask = Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
 
-        // Генерация: очередь, если включена конфигом
+        // очередь генерации
         generationListener.startQueueIfEnabled();
 
         BedrockOresCommand cmd = new BedrockOresCommand(this, nodeManager, generationListener);
@@ -74,7 +67,7 @@ public class BedrockOresPlugin extends JavaPlugin {
             getCommand("bedrockores").setTabCompleter(cmd);
         }
 
-        getLogger().info("BedrockOres enabled (safe snapshot async persistence, optimized generation).");
+        getLogger().info("BedrockOres enabled.");
     }
 
     @Override
