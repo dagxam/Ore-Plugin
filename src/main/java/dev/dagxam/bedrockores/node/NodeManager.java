@@ -15,14 +15,15 @@ import java.util.*;
 
 public class NodeManager {
     private final Plugin plugin;
+    private final Random rnd = new Random();
 
-    // Активные узлы: key(worldUUID:x:y:z) -> NodeData (исходная руда + прогресс)
+    // Активные узлы: key(worldUUID:x:y:z) -> NodeData
     private final Map<String, NodeData> nodes = new HashMap<>();
     // Обработанные чанки
     private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
     // Очередь респаунов
     private final Map<String, RespawnData> respawns = new HashMap<>();
-    // Индекс узлов по чанкам (для быстрых выборок)
+    // Индекс узлов по чанкам
     private final Map<UUID, Map<Long, List<Location>>> nodesByChunk = new HashMap<>();
 
     private final File dataFile;
@@ -36,15 +37,24 @@ public class NodeManager {
         return loc.getWorld().getUID() + ":" + loc.getBlockX() + ":" + loc.getBlockY() + ":" + loc.getBlockZ();
     }
 
+    public static String key(UUID worldId, int x, int y, int z) {
+        return worldId + ":" + x + ":" + y + ":" + z;
+    }
+
     public static long chunkKey(int cx, int cz) {
         return (((long) cx) << 32) ^ (cz & 0xffffffffL);
+    }
+
+    /** Быстрая проверка без new Location (важно для производительности генерации). */
+    public boolean isNode(UUID worldId, int x, int y, int z) {
+        return nodes.containsKey(key(worldId, x, y, z));
     }
 
     public boolean isNode(Location loc) { return nodes.containsKey(key(loc)); }
 
     public NodeData getNode(Location loc) { return nodes.get(key(loc)); }
 
-    // Добавить узел (физически ставим отображаемый блок согласно режиму server-solid)
+    // Добавить узел
     public void addNode(Location loc, Material oreMaterial, int hits) {
         int max = hits;
         NodeData nd = new NodeData(oreMaterial, hits, max);
@@ -76,7 +86,7 @@ public class NodeManager {
 
     public void clearAllProcessedFlags() { processedChunks.clear(); }
 
-    // Удалить узлы в чанке (для перегенерации)
+    // Удалить узлы в чанке
     public int removeNodesInChunk(Chunk chunk) {
         UUID wid = chunk.getWorld().getUID();
         int cx = chunk.getX(), cz = chunk.getZ();
@@ -103,7 +113,7 @@ public class NodeManager {
         return count;
     }
 
-    // Удалить отложенные респауны в чанке
+    // Удалить респауны в чанке
     public int removeRespawnsInChunk(Chunk chunk) {
         UUID wid = chunk.getWorld().getUID();
         int cx = chunk.getX(), cz = chunk.getZ();
@@ -127,16 +137,21 @@ public class NodeManager {
         return count;
     }
 
-    // Запланировать респаун узла через delay-seconds
+    // Запланировать респаун узла
     public void scheduleRespawn(Location loc, Material oreType) {
         if (!plugin.getConfig().getBoolean("respawn.enabled", true)) return;
         long delaySec = plugin.getConfig().getLong("respawn.delay-seconds", 3600L);
         long due = System.currentTimeMillis() + delaySec * 1000L;
         respawns.put(key(loc), new RespawnData(oreType, due));
-        save();
+
+        // ВАЖНО: не сохраняем файл каждый раз (это лаги при добыче).
+        // Если нужно — можно включить принудительное сохранение:
+        if (plugin.getConfig().getBoolean("persistence.save-on-respawn-schedule", false)) {
+            save();
+        }
     }
 
-    // Тик респаунов — возрождаем в загруженных чанках
+    // Тик респаунов
     public void tickRespawns() {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
@@ -156,10 +171,9 @@ public class NodeManager {
             done.add(e.getKey());
         }
         for (String k : done) respawns.remove(k);
-        if (!done.isEmpty()) save();
+        // save() не дергаем каждый тик — есть периодический snapshot-save
     }
 
-    // При загрузке чанка — довозрождаем просроченные
     public void processDueRespawnsInChunk(Chunk chunk) {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
@@ -186,7 +200,6 @@ public class NodeManager {
             done.add(e.getKey());
         }
         for (String k : done) respawns.remove(k);
-        if (!done.isEmpty()) save();
     }
 
     private Location locationFromKey(String k) {
@@ -205,7 +218,8 @@ public class NodeManager {
         }
     }
 
-    // Загрузка из файла
+    // ===== Load/Save =====
+
     public void load() {
         if (!dataFile.exists()) return;
         YamlConfiguration yml = YamlConfiguration.loadConfiguration(dataFile);
@@ -223,8 +237,7 @@ public class NodeManager {
                     Material type = Material.valueOf(Objects.requireNonNull(s.getString("type")));
                     int hits = s.getInt("hits");
                     int maxHits = s.getInt("maxHits", hits);
-                    String k = worldId + ":" + x + ":" + y + ":" + z;
-                    nodes.put(k, new NodeData(type, hits, maxHits));
+                    nodes.put(key(worldId, x, y, z), new NodeData(type, hits, maxHits));
                 } catch (Exception ignored) {}
             }
         }
@@ -260,8 +273,7 @@ public class NodeManager {
                     int z = s.getInt("z");
                     Material type = Material.valueOf(Objects.requireNonNull(s.getString("type")));
                     long dueAt = s.getLong("dueAt");
-                    String k = worldId + ":" + x + ":" + y + ":" + z;
-                    respawns.put(k, new RespawnData(type, dueAt));
+                    respawns.put(key(worldId, x, y, z), new RespawnData(type, dueAt));
                 } catch (Exception ignored) {}
             }
         }
@@ -270,18 +282,13 @@ public class NodeManager {
         plugin.getLogger().info("Loaded nodes=" + nodes.size() + ", respawns=" + respawns.size() + ", processed worlds=" + processedChunks.size());
     }
 
-    // ===== Persistence (thread-safe snapshot + async write) =====
     public record NodeEntry(UUID world, int x, int y, int z, Material type, int hits, int maxHits) {}
     public record RespawnEntry(UUID world, int x, int y, int z, Material type, long dueAtMillis) {}
     public record SaveSnapshot(List<NodeEntry> nodes,
                                Map<UUID, List<String>> processedChunks,
                                List<RespawnEntry> respawns) {}
 
-    /**
-     * Создаёт «снимок» данных для сохранения.
-     * ВАЖНО: вызывать из главного треда (или обеспечить внешнюю синхронизацию),
-     * чтобы избежать ConcurrentModificationException при одновременных изменениях.
-     */
+    /** СНИМОК (только main thread). */
     public SaveSnapshot createSnapshot() {
         List<NodeEntry> nodeList = new ArrayList<>(nodes.size());
         for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
@@ -321,7 +328,7 @@ public class NodeManager {
         return new SaveSnapshot(nodeList, processed, respawnList);
     }
 
-    /** Пишет snapshot в nodes.yml. Можно безопасно вызывать из async-треда. */
+    /** Пишем snapshot в файл (можно async). */
     public void saveSnapshot(SaveSnapshot snapshot) {
         YamlConfiguration yml = new YamlConfiguration();
 
@@ -359,12 +366,12 @@ public class NodeManager {
         }
     }
 
-    // Синхронное сохранение (например при выключении / по команде).
     public void save() {
         saveSnapshot(createSnapshot());
     }
 
-    // Перестроение индекса nodesByChunk
+    // ===== Index =====
+
     private void rebuildIndex() {
         nodesByChunk.clear();
         for (String k : nodes.keySet()) {
@@ -402,17 +409,13 @@ public class NodeManager {
         return nodesByChunk.getOrDefault(wid, Collections.emptyMap()).getOrDefault(ck, Collections.emptyList());
     }
 
-    // ======= CONFIG HELPERS =======
+    // ===== Config helpers =====
 
-    /**
-     * Нужно публично: GenerationListener и tickRespawns используют это значение.
-     * (Раньше был private -> ошибка компиляции.)
-     */
     public int randomHits() {
         int min = plugin.getConfig().getInt("node.hits-min", 3);
         int max = plugin.getConfig().getInt("node.hits-max", 7);
         if (max < min) { int t = max; max = min; min = t; }
-        return min + new Random().nextInt(Math.max(1, (max - min) + 1));
+        return min + rnd.nextInt(Math.max(1, (max - min) + 1));
     }
 
     private boolean serverSolidEnabled() {
@@ -430,14 +433,7 @@ public class NodeManager {
         }
     }
 
-    /**
-     * Совместимость с BedrockOresCommand:
-     * Применить/снять server-solid визуализацию ТОЛЬКО в указанном мире.
-     *
-     * @param world  мир
-     * @param enable true = ставим display-материал (если задан), false = возвращаем oreMaterial
-     * @return количество блоков, реально изменённых в мире
-     */
+    // Для совместимости с командой
     public int applyServerVisualsInWorld(World world, boolean enable) {
         if (world == null) return 0;
 
@@ -472,8 +468,6 @@ public class NodeManager {
         return changed;
     }
 
-    // Применить/снять визуалы "server-solid" для всех узлов
-    // Если forceApply=true — принудительно проставляет текущий режим (вкл/выкл) ко всем узлам
     public int applyServerVisualsForAllNodes(boolean forceApply) {
         if (!forceApply) return 0;
 
