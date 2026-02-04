@@ -3,42 +3,54 @@ enabled-worlds:
   - world_nether
 
 visual:
-  mode: none                 # overlay/particles/fakeblock не используем
+  mode: none
   server-solid:
-    enabled: true            # показывать узлы как «цельные» блоки на сервере
-    map:                     # соответствие: исходная руда -> какой блок ставить
+    enabled: false
+    map:
       DEEPSLATE_DIAMOND_ORE: DIAMOND_BLOCK
       DEEPSLATE_EMERALD_ORE: EMERALD_BLOCK
-      DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK     # если не нужен сигнал — замените, напр., на RED_NETHER_BRICKS
+      DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK
       DEEPSLATE_LAPIS_ORE:   LAPIS_BLOCK
       DEEPSLATE_GOLD_ORE:    GOLD_BLOCK
       DEEPSLATE_IRON_ORE:    IRON_BLOCK
       DEEPSLATE_COAL_ORE:    COAL_BLOCK
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Генерация узлов: увеличенный размер кластера (кол-во блоков рядом)
+      # Виртуальная "руда": NETHERITE_SCRAP
+      # Физически узел ставит ANCIENT_DEBRIS, но дроп будет NETHERITE_SCRAP
+      NETHERITE_SCRAP: ANCIENT_DEBRIS
+
 generation:
-  # другие параметры генерации можно оставить пустыми — плагин возьмёт дефолты
-  cluster:
-    size-min: 10            # было меньше — теперь минимум 10
-    size-max: 20            # верхняя граница 20
-  # при необходимости можно добавить:
+  # Если y-min/y-max не заданы — по умолчанию берётся узкая полоса "near bedrock"
   # y-min: -64
-  # y-max: 320
-  # chance-per-block: 0.008
-  # density-multiplier: 1.0
-  # target-per-chunk: 12
-  # max-per-chunk: 24
-  # fill-attempts-per-node: 25
+  # y-max: -56
+
+  default-bedrock-band: 8
+
+  cluster:
+    # Рекомендую не ставить 10..20 (будут лаги и очень много замен блоков)
+    size-min: 3
+    size-max: 6
+    min-spacing: 4
+
+  chance-per-block: 0.008
+  density-multiplier: 1.0
+  target-per-chunk: 12
+  max-per-chunk: 24
+  fill-attempts-per-node: 25
+  max-attempts-per-chunk: 1800
+
+  overworld:
+    allow-stone-variants: true
+
   queue:
     enabled: true
     chunks-per-tick: 2
-    positions-per-tick: 300          # зарезервировано (если логика не задействована)
-    fill-attempts-per-tick: 180      # зарезервировано
+    positions-per-tick: 300
+    fill-attempts-per-tick: 180
 
-fortune-enabled: true           # учитывать Fortune (упрощённая модель)
+fortune-enabled: true
 
-# Частота типов руд (чем больше вес — тем чаще)
+# Общие веса (Overworld)
 ore-weights:
   DEEPSLATE_REDSTONE_ORE: 8
   DEEPSLATE_IRON_ORE: 6
@@ -48,23 +60,23 @@ ore-weights:
   DEEPSLATE_LAPIS_ORE: 3
   DEEPSLATE_DIAMOND_ORE: 1
   DEEPSLATE_EMERALD_ORE: 1
-  ANCIENT_DEBRIS: 1
 
-# Можно задать отдельные веса по мирам:
-# ore-weights-overworld:
-#   DEEPSLATE_REDSTONE_ORE: 8
-#   ...
-# ore-weights-nether:
-#   ANCIENT_DEBRIS: 2
-#   DEEPSLATE_GOLD_ORE: 1
+# Nether веса (добавили NETHERITE_SCRAP)
+ore-weights-nether:
+  NETHERITE_SCRAP: 2
+  DEEPSLATE_GOLD_ORE: 1
 
 respawn:
   enabled: true
-  delay-seconds: 3600           # через сколько секунд узел возродится
+  delay-seconds: 3600
+
+# Если хочешь сохранять nodes.yml сразу при scheduleRespawn (может лагать при активной добыче)
+persistence:
+  save-on-respawn-schedule: false
 
 performance:
   direct-item-to-inventory: true
-  xp-mode: direct               # direct = сразу игроку; orb = орбами
-  hold-hit-interval-ticks: 5    # если вернёте «удары при удержании» — скорость
+  xp-mode: direct
+  hold-hit-interval-ticks: 5
   hold-timeout-ms: 400
   max-hold-hits-per-tick: 60
