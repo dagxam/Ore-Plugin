@@ -404,7 +404,11 @@ public class NodeManager {
 
     // ======= CONFIG HELPERS =======
 
-    private int randomHits() {
+    /**
+     * Нужно публично: GenerationListener и tickRespawns используют это значение.
+     * (Раньше был private -> ошибка компиляции.)
+     */
+    public int randomHits() {
         int min = plugin.getConfig().getInt("node.hits-min", 3);
         int max = plugin.getConfig().getInt("node.hits-max", 7);
         if (max < min) { int t = max; max = min; min = t; }
@@ -424,6 +428,48 @@ public class NodeManager {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * Совместимость с BedrockOresCommand:
+     * Применить/снять server-solid визуализацию ТОЛЬКО в указанном мире.
+     *
+     * @param world  мир
+     * @param enable true = ставим display-материал (если задан), false = возвращаем oreMaterial
+     * @return количество блоков, реально изменённых в мире
+     */
+    public int applyServerVisualsInWorld(World world, boolean enable) {
+        if (world == null) return 0;
+
+        int changed = 0;
+        UUID wid = world.getUID();
+
+        for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
+            String[] p = e.getKey().split(":");
+            if (p.length != 4) continue;
+
+            UUID w;
+            try { w = UUID.fromString(p[0]); }
+            catch (Exception ex) { continue; }
+
+            if (!wid.equals(w)) continue;
+
+            Location loc = locationFromKey(e.getKey());
+            if (loc == null) continue;
+
+            Material target = e.getValue().oreMaterial;
+            if (enable) {
+                Material disp = displayFor(e.getValue().oreMaterial);
+                if (disp != null) target = disp;
+            }
+
+            if (loc.getBlock().getType() != target) {
+                loc.getBlock().setType(target, false);
+                changed++;
+            }
+        }
+
+        return changed;
     }
 
     // Применить/снять визуалы "server-solid" для всех узлов
