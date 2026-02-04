@@ -17,12 +17,14 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.*;
 
 /**
- * Генерация «узлов руды у бедрока».
+ * Генерация узлов.
  *
- * Оптимизация нагрузки:
- * - Больше НЕ сканируем весь чанк по высоте.
- * - Используем ограниченное число попыток (attempt-based generation).
- * - Если y-min/y-max не заданы, автоматически берём "бедрок-диапазон" (узкая полоса).
+ * Важное:
+ * - Анти-цветы/анти-мусор: из ore-weights пропускаются только:
+ *   - *_ORE
+ *   - ANCIENT_DEBRIS
+ *   - NETHERITE_SCRAP (виртуальная "руда": ставим ANCIENT_DEBRIS, дропаем scrap)
+ * - Очередь генерации не "залипает": ключ снимается сразу после poll().
  */
 public class GenerationListener implements Listener {
     private final Plugin plugin;
@@ -41,7 +43,7 @@ public class GenerationListener implements Listener {
     private final Set<String> queuedKeys = new HashSet<>();
     private BukkitTask queueTask = null;
 
-    // Кэш "replaceable" (чтобы не делать name()/endsWith в горячем цикле)
+    // Кэш "replaceable"
     private final EnumMap<Material, Boolean> replaceableOverworldCache = new EnumMap<>(Material.class);
     private final EnumMap<Material, Boolean> replaceableNetherCache = new EnumMap<>(Material.class);
 
@@ -63,9 +65,9 @@ public class GenerationListener implements Listener {
     }
 
     public void reloadWeights() {
-        weightsDefault = loadWeights("ore-weights");
-        Map<Material, Integer> ow = loadWeights("ore-weights-overworld");
-        Map<Material, Integer> ne = loadWeights("ore-weights-nether");
+        weightsDefault = loadWeightsFiltered("ore-weights");
+        Map<Material, Integer> ow = loadWeightsFiltered("ore-weights-overworld");
+        Map<Material, Integer> ne = loadWeightsFiltered("ore-weights-nether");
         weightsOverworld = ow.isEmpty() ? null : ow;
         weightsNether = ne.isEmpty() ? null : ne;
 
@@ -109,8 +111,7 @@ public class GenerationListener implements Listener {
     }
 
     /**
-     * ВАЖНО: фикс "залипания очереди".
-     * Ключ queuedKeys снимаем сразу после poll(), иначе при continue (чанк выгрузился) ключ зависнет навсегда.
+     * Фикс "залипания очереди": ключ снимаем сразу после poll().
      */
     private void drainQueue() {
         if (chunkQueue.isEmpty()) return;
@@ -128,10 +129,7 @@ public class GenerationListener implements Listener {
             if (world == null) continue;
             if (!plugin.getConfig().getStringList("enabled-worlds").contains(world.getName())) continue;
 
-            if (!world.isChunkLoaded(cx, cz)) {
-                // если чанк выгрузился — забудем; при повторной загрузке он снова встанет в очередь
-                continue;
-            }
+            if (!world.isChunkLoaded(cx, cz)) continue;
 
             Chunk chunk = world.getChunkAt(cx, cz);
 
@@ -150,19 +148,41 @@ public class GenerationListener implements Listener {
         return world + ":" + cx + ":" + cz;
     }
 
-    private Map<Material, Integer> loadWeights(String section) {
+    // ===== Анти-цветы (weights) =====
+
+    private Map<Material, Integer> loadWeightsFiltered(String section) {
         LinkedHashMap<Material, Integer> map = new LinkedHashMap<>();
         ConfigurationSection w = plugin.getConfig().getConfigurationSection(section);
-        if (w != null) {
-            for (String k : w.getKeys(false)) {
-                try {
-                    Material m = Material.valueOf(k);
-                    int wt = w.getInt(k);
-                    if (wt > 0) map.put(m, wt);
-                } catch (Exception ignored) {}
+        if (w == null) return map;
+
+        for (String k : w.getKeys(false)) {
+            Material m;
+            try { m = Material.valueOf(k); }
+            catch (Exception ex) {
+                plugin.getLogger().warning("[BedrockOres] Invalid material in " + section + ": " + k);
+                continue;
             }
+
+            int wt = w.getInt(k);
+            if (wt <= 0) continue;
+
+            if (!isAllowedOreMaterial(m)) {
+                plugin.getLogger().warning(
+                        "[BedrockOres] Blocked non-ore material in " + section + ": " + m +
+                        " (allowed: *_ORE, ANCIENT_DEBRIS, NETHERITE_SCRAP)"
+                );
+                continue;
+            }
+
+            map.put(m, wt);
         }
         return map;
+    }
+
+    private boolean isAllowedOreMaterial(Material m) {
+        if (m == Material.ANCIENT_DEBRIS) return true;
+        if (m == Material.NETHERITE_SCRAP) return true; // виртуальная "руда"
+        return m.name().endsWith("_ORE");
     }
 
     private Map<Material, Integer> weightsFor(World world) {
@@ -195,7 +215,7 @@ public class GenerationListener implements Listener {
         }
     }
 
-    // ===== Optimized generation =====
+    // ===== Generation =====
 
     public void generateInChunk(Chunk chunk) {
         World world = chunk.getWorld();
@@ -204,9 +224,11 @@ public class GenerationListener implements Listener {
         Map<Material, Integer> weights = weightsFor(world);
         if (weights == null || weights.isEmpty()) return;
 
-        // Y-диапазон:
-        // - если явно задан — используем его
-        // - иначе узкая «бедрок полоса»
+        // Netherite scrap разрешаем только в Nether (если случайно добавили в общий вес — всё равно не выпадет вне Nether)
+        // End/прочие миры по умолчанию не генерим
+        if (env != Environment.NORMAL && env != Environment.NETHER) return;
+
+        // Y-диапазон: если не задан — берём узкую полосу у низа
         int minY, maxY;
         boolean hasMin = plugin.getConfig().isInt("generation.y-min");
         boolean hasMax = plugin.getConfig().isInt("generation.y-max");
@@ -217,16 +239,13 @@ public class GenerationListener implements Listener {
             if (hasMin) minY = Math.max(minY, plugin.getConfig().getInt("generation.y-min"));
             if (hasMax) maxY = Math.min(maxY, plugin.getConfig().getInt("generation.y-max"));
         } else {
-            // безопасные дефолты "near bedrock"
             int band = Math.max(4, plugin.getConfig().getInt("generation.default-bedrock-band", 8));
             minY = world.getMinHeight();
             maxY = Math.min(world.getMaxHeight() - 1, minY + band);
         }
 
-        // В End/прочих мирах по умолчанию не генерим
-        if (env != Environment.NORMAL && env != Environment.NETHER) return;
+        int yLen = Math.max(1, (maxY - minY + 1));
 
-        // Параметры кластеров
         int minSpacing = Math.max(1, plugin.getConfig().getInt("generation.cluster.min-spacing", 4));
         int spacing2 = minSpacing * minSpacing;
 
@@ -237,18 +256,13 @@ public class GenerationListener implements Listener {
         int maxClusters = Math.max(targetClusters, plugin.getConfig().getInt("generation.max-per-chunk", 24));
         int fillAttemptsPerCluster = Math.max(5, plugin.getConfig().getInt("generation.fill-attempts-per-node", 25));
 
-        // "chance-per-block" оставляем как влияние на кол-во попыток, но НЕ сканируем весь объём
         double chance = plugin.getConfig().getDouble("generation.chance-per-block", 0.008D);
         chance *= plugin.getConfig().getDouble("generation.density-multiplier", 1.0D);
         if (chance < 0.0D) chance = 0.0D;
 
-        int yLen = Math.max(1, (maxY - minY + 1));
         int volume = 16 * 16 * yLen;
-
-        // Ограничение попыток на чанк (главный анти-лаг параметр)
         int hardCap = Math.max(200, plugin.getConfig().getInt("generation.max-attempts-per-chunk", 1800));
 
-        // Сколько пробуем: от цели и от chance/объёма
         int expected = (int) Math.ceil(volume * chance);
         int attempts = Math.max(targetClusters * fillAttemptsPerCluster, expected * 2 + 100);
         attempts = Math.min(hardCap, Math.max(200, attempts));
@@ -278,32 +292,6 @@ public class GenerationListener implements Listener {
             if (tryPlaceCluster(chunk, wid, x, y, z, ore, clusterMin, clusterMax, minY, maxY, minSpacing, spacing2, env)) {
                 placedCentersLocal.add(new int[]{x, z});
                 placed++;
-            }
-        }
-
-        // Если прям совсем не добрали — делаем небольшую добивку (но тоже capped)
-        if (placed < targetClusters) {
-            int need = targetClusters - placed;
-            int extra = Math.min(hardCap / 2, need * fillAttemptsPerCluster);
-            while (extra-- > 0 && placed < targetClusters) {
-                int x = baseX + random.nextInt(16);
-                int z = baseZ + random.nextInt(16);
-                int y = minY + random.nextInt(yLen);
-
-                Material host = fastType(chunk, x, y, z);
-                if (host == null) continue;
-                if (!isReplaceableCached(host, env)) continue;
-
-                if (!farEnoughFromLocal2D(placedCentersLocal, x, z, spacing2)) continue;
-                if (!farEnoughFromExistingNodes2D(wid, x, y, z, minSpacing, spacing2)) continue;
-
-                Material ore = rollOre(weights, world);
-                if (ore == null) continue;
-
-                if (tryPlaceCluster(chunk, wid, x, y, z, ore, clusterMin, clusterMax, minY, maxY, minSpacing, spacing2, env)) {
-                    placedCentersLocal.add(new int[]{x, z});
-                    placed++;
-                }
             }
         }
     }
@@ -336,11 +324,8 @@ public class GenerationListener implements Listener {
     }
 
     private boolean isReplaceableOverworld(Material m) {
-        // Быстрый минимум (без string-heavy), плюс популярные каменные варианты
         if (m == Material.DEEPSLATE || m == Material.STONE || m == Material.TUFF) return true;
 
-        // Если хочешь 100% старое поведение — можно включить через конфиг:
-        // generation.overworld.allow-stone-variants: true
         boolean allowVariants = plugin.getConfig().getBoolean("generation.overworld.allow-stone-variants", true);
         if (!allowVariants) return false;
 
@@ -358,7 +343,6 @@ public class GenerationListener implements Listener {
     }
 
     private boolean farEnoughFromExistingNodes2D(UUID worldId, int x, int y, int z, int spacing, int spacing2) {
-        // Минимум аллокаций: без new Location
         for (int dy = -2; dy <= 2; dy++) {
             int yy = y + dy;
             for (int dx = -spacing; dx <= spacing; dx++) {
@@ -386,7 +370,6 @@ public class GenerationListener implements Listener {
 
         int size = clusterMin + random.nextInt(clusterMax - clusterMin + 1);
 
-        // Храним координаты без Location (меньше мусора)
         List<int[]> cluster = new ArrayList<>(size);
         cluster.add(new int[]{cx, cy, cz});
 
@@ -428,18 +411,31 @@ public class GenerationListener implements Listener {
     private Material rollOre(Map<Material, Integer> weights, World world) {
         if (weights == null || weights.isEmpty()) return null;
 
+        Environment env = world.getEnvironment();
+
         int total = 0;
         for (Map.Entry<Material, Integer> e : weights.entrySet()) {
-            if (e.getKey() == Material.ANCIENT_DEBRIS && world.getEnvironment() != Environment.NETHER) continue;
+            Material m = e.getKey();
+
+            // NETHERITE_SCRAP разрешаем только в Nether
+            if (m == Material.NETHERITE_SCRAP && env != Environment.NETHER) continue;
+
+            // ANCIENT_DEBRIS тоже только Nether
+            if (m == Material.ANCIENT_DEBRIS && env != Environment.NETHER) continue;
+
             total += e.getValue();
         }
         if (total <= 0) return null;
 
         int r = random.nextInt(total), acc = 0;
         for (Map.Entry<Material, Integer> e : weights.entrySet()) {
-            if (e.getKey() == Material.ANCIENT_DEBRIS && world.getEnvironment() != Environment.NETHER) continue;
+            Material m = e.getKey();
+
+            if (m == Material.NETHERITE_SCRAP && env != Environment.NETHER) continue;
+            if (m == Material.ANCIENT_DEBRIS && env != Environment.NETHER) continue;
+
             acc += e.getValue();
-            if (r < acc) return e.getKey();
+            if (r < acc) return m;
         }
         return null;
     }
