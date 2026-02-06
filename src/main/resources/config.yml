@@ -1,11 +1,22 @@
+# В каких мирах работает плагин
 enabled-worlds:
   - world
   - world_nether
 
+# Настройки узла (удары до истощения)
+node:
+  hits-min: 9
+  hits-max: 20
+
 visual:
+  # none | server-solid (если поддерживается)
   mode: none
+
   server-solid:
     enabled: false
+
+    # чем отображать физический блок узла на сервере
+    # ключ = "логическая руда/дроп", значение = блок, который ставим в мир
     map:
       DEEPSLATE_DIAMOND_ORE: DIAMOND_BLOCK
       DEEPSLATE_EMERALD_ORE: EMERALD_BLOCK
@@ -20,14 +31,14 @@ visual:
       NETHERITE_SCRAP: ANCIENT_DEBRIS
 
 generation:
-  # Если y-min/y-max не заданы — по умолчанию берётся узкая полоса "near bedrock"
+  # Если y-min/y-max не заданы — берётся узкая полоса "near bedrock"
   # y-min: -64
   # y-max: -56
 
+  # ширина зоны от нижней границы мира (near bedrock band)
   default-bedrock-band: 8
 
   cluster:
-    # Рекомендую не ставить 10..20 (будут лаги и очень много замен блоков)
     size-min: 3
     size-max: 6
     min-spacing: 4
@@ -68,7 +79,13 @@ ore-weights-nether:
 
 respawn:
   enabled: true
+
+  # фиксированная задержка респавна (как у тебя было)
   delay-seconds: 3600
+
+  # (опционально) если в коде поддерживаются min/max
+  # min-seconds: 300
+  # max-seconds: 900
 
 # Если хочешь сохранять nodes.yml сразу при scheduleRespawn (может лагать при активной добыче)
 persistence:
