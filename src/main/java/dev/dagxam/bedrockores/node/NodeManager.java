@@ -50,15 +50,19 @@ public class NodeManager {
 
     // ===== CONFIG HELPERS =====
 
-    private int randomHits() {
-        int min = plugin.getConfig().getInt("min-hits", 15);
-        int max = plugin.getConfig().getInt("max-hits", 25);
+    public int randomHits() {
+        int min = plugin.getConfig().getInt("node.hits-min", 3);
+        int max = plugin.getConfig().getInt("node.hits-max", 7);
         if (max < min) max = min;
+        if (min < 1) min = 1;
         return min + rnd.nextInt((max - min) + 1);
     }
 
-    public Material pickOreMaterial() {
-        ConfigurationSection sec = plugin.getConfig().getConfigurationSection("ore-weights");
+    public Material pickOreMaterial(World world) {
+        boolean isNether = world.getEnvironment() == World.Environment.NETHER;
+
+        String weightsKey = isNether ? "ore-weights-nether" : "ore-weights";
+        ConfigurationSection sec = plugin.getConfig().getConfigurationSection(weightsKey);
         if (sec == null) return Material.COAL_ORE;
 
         double total = 0.0;
@@ -79,19 +83,23 @@ public class NodeManager {
         return Material.COAL_ORE;
     }
 
-    public Material getDisplayMaterial(Material oreMaterial) {
-        String path = "display-materials." + oreMaterial.name();
-        String matName = plugin.getConfig().getString(path, null);
-        if (matName == null || matName.isEmpty()) return oreMaterial;
+    public Material getServerSolidMaterial(Material oreMaterial) {
+        String key = "visual.server-solid.map." + oreMaterial.name();
+        String matName = plugin.getConfig().getString(key, null);
+        if (matName == null) return oreMaterial;
 
         Material m = Material.matchMaterial(matName);
         if (m == null) {
-            if (warnedDisplayMaterials.add(path)) {
-                plugin.getLogger().warning("Invalid display material '" + matName + "' for " + oreMaterial + " in " + path);
+            if (warnedDisplayMaterials.add(key)) {
+                plugin.getLogger().warning("Invalid visual.server-solid.map material '" + matName + "' for " + oreMaterial + " (" + key + ")");
             }
             return oreMaterial;
         }
         return m;
+    }
+
+    public boolean serverSolidEnabled() {
+        return plugin.getConfig().getBoolean("visual.server-solid.enabled", false);
     }
 
     // ===== INDEX =====
@@ -138,13 +146,20 @@ public class NodeManager {
         return nodes.containsKey(key(loc));
     }
 
-    public void addNode(Location loc, Material oreType, int hitsLeft) {
-        String k = key(loc);
-        nodes.put(k, new NodeData(oreType, hitsLeft));
+    // перегрузка, которую использует генератор
+    public boolean isNode(UUID worldId, int x, int y, int z) {
+        World w = Bukkit.getWorld(worldId);
+        if (w == null) return false;
+        return isNode(new Location(w, x, y, z));
+    }
 
-        // выставляем блок
-        Material display = getDisplayMaterial(oreType);
-        loc.getBlock().setType(display, false);
+    public void addNode(Location loc, Material oreType, int maxHits) {
+        String k = key(loc);
+        nodes.put(k, new NodeData(oreType, maxHits, maxHits));
+
+        // выставляем блок (если server-solid включён — ставим "маску")
+        Material placeMat = serverSolidEnabled() ? getServerSolidMaterial(oreType) : oreType;
+        loc.getBlock().setType(placeMat, false);
 
         indexNode(loc);
 
@@ -165,40 +180,42 @@ public class NodeManager {
         }
     }
 
-    public void decrementHits(Location loc) {
-        String k = key(loc);
-        NodeData nd = nodes.get(k);
-        if (nd == null) return;
+    public int hitNode(Location loc) {
+        NodeData nd = nodes.get(key(loc));
+        if (nd == null) return 0;
 
-        nd.hitsLeft--;
-        if (nd.hitsLeft <= 0) {
+        nd.hitsRemaining--;
+        if (nd.hitsRemaining <= 0) {
             // исчерпан -> бедрок и респаун
             Material oreType = nd.oreMaterial;
             removeNode(loc);
 
             loc.getBlock().setType(Material.BEDROCK, false);
-            scheduleRespawn(loc, oreType);
-        } else {
-            if (plugin.getConfig().getBoolean("persistence.save-on-hit", false)) {
-                save();
+
+            if (plugin.getConfig().getBoolean("respawn.enabled", true)) {
+                scheduleRespawn(loc, oreType);
             }
+            return 0;
         }
+        return nd.hitsRemaining;
     }
 
-    public int getHitsLeft(Location loc) {
+    public int getMaxHits(Location loc) {
         NodeData nd = nodes.get(key(loc));
-        return nd != null ? nd.hitsLeft : 0;
+        return nd != null ? nd.maxHits : 0;
+    }
+
+    public int getHitsRemaining(Location loc) {
+        NodeData nd = nodes.get(key(loc));
+        return nd != null ? nd.hitsRemaining : 0;
     }
 
     // ===== RESPAWNS =====
 
     public void scheduleRespawn(Location loc, Material oreType) {
-        int min = plugin.getConfig().getInt("respawn.min-seconds", 300);
-        int max = plugin.getConfig().getInt("respawn.max-seconds", 900);
-        if (max < min) max = min;
-        int delaySec = min + rnd.nextInt((max - min) + 1);
+        long delaySeconds = plugin.getConfig().getLong("respawn.delay-seconds", 300L);
+        long due = System.currentTimeMillis() + delaySeconds * 1000L;
 
-        long due = System.currentTimeMillis() + delaySec * 1000L;
         respawns.put(key(loc), new RespawnData(oreType, due));
 
         if (plugin.getConfig().getBoolean("persistence.save-on-respawn-schedule", false)) {
@@ -206,23 +223,23 @@ public class NodeManager {
         }
     }
 
+    /** FIXED: no CME + не триггерим загрузку чанков из tick-а */
     public void tickRespawns() {
         if (respawns.isEmpty()) return;
         long now = System.currentTimeMillis();
         List<String> done = new ArrayList<>();
 
-        // Итерация по "снимку", чтобы не падать при ре-энтрантных модификациях карты
+        // Итерация по "снимку", чтобы не падать при ре-энтрантных изменениях respawns
         for (Map.Entry<String, RespawnData> e : new ArrayList<>(respawns.entrySet())) {
             RespawnData rd = e.getValue();
             if (rd.dueAtMillis > now) continue;
 
             Location loc = locationFromKey(e.getKey());
             if (loc == null) { done.add(e.getKey()); continue; }
-
             World w = loc.getWorld();
             if (w == null) { done.add(e.getKey()); continue; }
 
-            // ВАЖНО: не используем loc.getChunk(), чтобы не триггерить загрузку чанка и ChunkLoadEvent
+            // ВАЖНО: не используем loc.getChunk() (может загрузить чанк и вызвать ChunkLoadEvent)
             int cx = loc.getBlockX() >> 4;
             int cz = loc.getBlockZ() >> 4;
             if (!w.isChunkLoaded(cx, cz)) continue;
@@ -230,7 +247,6 @@ public class NodeManager {
             addNode(loc, rd.oreMaterial, randomHits());
             done.add(e.getKey());
         }
-
         for (String k : done) respawns.remove(k);
     }
 
@@ -242,8 +258,7 @@ public class NodeManager {
 
         List<String> done = new ArrayList<>();
 
-        // Итерация по "снимку" на случай, если во время вызова (например, в ChunkLoadEvent)
-        // карта respawns модифицируется вложенно.
+        // Итерация по "снимку" на случай ре-энтранта
         for (Map.Entry<String, RespawnData> e : new ArrayList<>(respawns.entrySet())) {
             String[] p = e.getKey().split(":");
             if (p.length != 4) continue;
@@ -266,7 +281,6 @@ public class NodeManager {
             addNode(loc, rd.oreMaterial, randomHits());
             done.add(e.getKey());
         }
-
         for (String k : done) respawns.remove(k);
     }
 
@@ -286,7 +300,7 @@ public class NodeManager {
         }
     }
 
-    // ===== LOAD =====
+    // ===== LOAD/SAVE =====
 
     public void load() {
         nodes.clear();
@@ -302,7 +316,8 @@ public class NodeManager {
         if (nodesSec != null) {
             for (String k : nodesSec.getKeys(false)) {
                 String matName = nodesSec.getString(k + ".ore", "COAL_ORE");
-                int hits = nodesSec.getInt(k + ".hits", randomHits());
+                int remaining = nodesSec.getInt(k + ".remaining", 1);
+                int max = nodesSec.getInt(k + ".max", 1);
 
                 Material m = Material.matchMaterial(matName);
                 if (m == null) m = Material.COAL_ORE;
@@ -310,7 +325,7 @@ public class NodeManager {
                 Location loc = locationFromKey(k);
                 if (loc == null) continue;
 
-                nodes.put(k, new NodeData(m, hits));
+                nodes.put(k, new NodeData(m, remaining, max));
                 indexNode(loc);
             }
         }
@@ -333,6 +348,7 @@ public class NodeManager {
             for (String widStr : procSec.getKeys(false)) {
                 try {
                     UUID wid = UUID.fromString(widStr);
+                    @SuppressWarnings("unchecked")
                     List<Long> list = (List<Long>) procSec.getList(widStr, new ArrayList<>());
                     if (list == null) continue;
                     processedChunks.put(wid, new HashSet<>(list));
@@ -353,7 +369,8 @@ public class NodeManager {
         for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
             NodeData nd = e.getValue();
             nodesSec.set(e.getKey() + ".ore", nd.oreMaterial.name());
-            nodesSec.set(e.getKey() + ".hits", nd.hitsLeft);
+            nodesSec.set(e.getKey() + ".remaining", nd.hitsRemaining);
+            nodesSec.set(e.getKey() + ".max", nd.maxHits);
         }
 
         ConfigurationSection respSec = yml.createSection("respawns");
@@ -375,7 +392,7 @@ public class NodeManager {
         }
     }
 
-    // ===== GENERATION / CHUNK FLAGS =====
+    // ===== CHUNK FLAGS / COMMAND HELPERS =====
 
     public boolean isChunkProcessed(World w, int cx, int cz) {
         UUID wid = w.getUID();
@@ -390,9 +407,37 @@ public class NodeManager {
         processedChunks.get(wid).add(chunkKey(cx, cz));
     }
 
-    public void clearProcessedFlags() {
-        processedChunks.clear();
-        save();
+    public void clearProcessedFlags(World w) {
+        processedChunks.remove(w.getUID());
+    }
+
+    public void removeNodesInChunk(Chunk chunk) {
+        List<Location> in = getNodesInChunk(chunk);
+        for (Location loc : in) {
+            removeNode(loc);
+            // аккуратно: блоки оставляем как есть (команда для регена решает дальше)
+        }
+    }
+
+    public void removeRespawnsInChunk(Chunk chunk) {
+        UUID wid = chunk.getWorld().getUID();
+        int cx = chunk.getX(), cz = chunk.getZ();
+
+        List<String> remove = new ArrayList<>();
+        for (String k : respawns.keySet()) {
+            String[] p = k.split(":");
+            if (p.length != 4) continue;
+            UUID w;
+            try { w = UUID.fromString(p[0]); } catch (Exception ex) { continue; }
+            if (!w.equals(wid)) continue;
+
+            int x = Integer.parseInt(p[1]);
+            int z = Integer.parseInt(p[3]);
+            if ((x >> 4) != cx || (z >> 4) != cz) continue;
+
+            remove.add(k);
+        }
+        for (String k : remove) respawns.remove(k);
     }
 
     public List<Location> getNodesInChunk(Chunk chunk) {
@@ -402,5 +447,57 @@ public class NodeManager {
         long ck = chunkKey(chunk.getX(), chunk.getZ());
         List<Location> list = map.get(ck);
         return list != null ? new ArrayList<>(list) : Collections.emptyList();
+    }
+
+    // ===== VISUALS =====
+
+    public void applyServerVisualsForAllNodes(boolean force) {
+        if (!serverSolidEnabled() && !force) return;
+
+        for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
+            Location loc = locationFromKey(e.getKey());
+            if (loc == null) continue;
+            NodeData nd = e.getValue();
+
+            Material placeMat = serverSolidEnabled() ? getServerSolidMaterial(nd.oreMaterial) : nd.oreMaterial;
+            loc.getBlock().setType(placeMat, false);
+        }
+    }
+
+    public void applyServerVisualsInWorld(World world, boolean force) {
+        if (!serverSolidEnabled() && !force) return;
+
+        UUID wid = world.getUID();
+        for (Map.Entry<String, NodeData> e : nodes.entrySet()) {
+            String k = e.getKey();
+            if (!k.startsWith(wid.toString() + ":")) continue;
+
+            Location loc = locationFromKey(k);
+            if (loc == null) continue;
+
+            NodeData nd = e.getValue();
+            Material placeMat = serverSolidEnabled() ? getServerSolidMaterial(nd.oreMaterial) : nd.oreMaterial;
+            loc.getBlock().setType(placeMat, false);
+        }
+    }
+
+    // ===== SNAPSHOT =====
+
+    public static class SaveSnapshot {
+        public final int nodesCount;
+        public final int respawnsCount;
+        public final int processedChunksCount;
+
+        public SaveSnapshot(int nodesCount, int respawnsCount, int processedChunksCount) {
+            this.nodesCount = nodesCount;
+            this.respawnsCount = respawnsCount;
+            this.processedChunksCount = processedChunksCount;
+        }
+    }
+
+    public SaveSnapshot createSnapshot() {
+        int pc = 0;
+        for (Set<Long> s : processedChunks.values()) pc += s.size();
+        return new SaveSnapshot(nodes.size(), respawns.size(), pc);
     }
 }
