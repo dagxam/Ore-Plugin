@@ -7,6 +7,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.ExperienceOrb;
@@ -48,6 +49,12 @@ public class OreListeners implements Listener {
         Bukkit.getScheduler().runTaskTimer(plugin, this::tickHolds, intervalTicks, intervalTicks);
     }
 
+    private boolean isAllowedPickaxe(ItemStack tool) {
+        if (tool == null) return false;
+        Material t = tool.getType();
+        return t == Material.DIAMOND_PICKAXE || t == Material.NETHERITE_PICKAXE;
+    }
+
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onLeftClick(PlayerInteractEvent e) {
         if (e.getAction() != Action.LEFT_CLICK_BLOCK) return;
@@ -72,6 +79,14 @@ public class OreListeners implements Listener {
             return;
         }
 
+        // Добыча только алмазной / незеритовой киркой
+        if (!isAllowedPickaxe(p.getInventory().getItemInMainHand())) {
+            e.setCancelled(true);
+            refreshClientBlock(block);
+            p.sendActionBar(Component.text("Нужна алмазная или незеритовая кирка."));
+            return;
+        }
+
         e.setCancelled(true);
         refreshClientBlock(block);
         startOrUpdateHold(p, block.getLocation());
@@ -87,6 +102,15 @@ public class OreListeners implements Listener {
             e.setCancelled(true);
             e.setInstaBreak(false);
             refreshClientBlock(block);
+            return;
+        }
+
+        // Добыча только алмазной / незеритовой киркой
+        if (!isAllowedPickaxe(p.getInventory().getItemInMainHand())) {
+            e.setCancelled(true);
+            e.setInstaBreak(false);
+            refreshClientBlock(block);
+            p.sendActionBar(Component.text("Нужна алмазная или незеритовая кирка."));
             return;
         }
 
@@ -152,12 +176,21 @@ public class OreListeners implements Listener {
                 continue;
             }
 
+            // Если игрок сменил инструмент во время удержания — прекращаем.
+            if (!isAllowedPickaxe(p.getInventory().getItemInMainHand())) {
+                it.remove();
+                p.sendActionBar(Component.text("Нужна алмазная или незеритовая кирка."));
+                continue;
+            }
+
             if (now - hs.lastSeenNs > timeoutNs) {
                 it.remove();
                 continue;
             }
 
-            if (!nm.isNode(hs.loc) || !hs.loc.getChunk().isLoaded()) {
+            // Не вызываем hs.loc.getChunk(): он может загрузить чанк. Проверяем безопасно.
+            World w = hs.loc.getWorld();
+            if (!nm.isNode(hs.loc) || w == null || !w.isChunkLoaded(hs.loc.getBlockX() >> 4, hs.loc.getBlockZ() >> 4)) {
                 it.remove();
                 continue;
             }
@@ -192,8 +225,7 @@ public class OreListeners implements Listener {
         nd.hitsRemaining--;
 
         if (nd.hitsRemaining <= 0) {
-            nm.scheduleRespawn(block.getLocation(), nd.oreMaterial);
-
+            // По запросу: после добычи узел НЕ должен обновляться (не ставим в очередь респавна)
             block.setType(Material.BEDROCK, false);
 
             block.getWorld().playSound(block.getLocation().add(0.5, 0.5, 0.5), Sound.BLOCK_ANVIL_PLACE, 0.7f, 0.8f);
