@@ -1,35 +1,58 @@
-name: Build with Maven (Java 21)
+name: Сборка и Релиз Ore-Plugin
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ] # Срабатывает при пуше в main или master
+    tags:
+      - 'v*' # Релиз создается только при пуше тега (например, v1.0.0)
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # Права для бота на создание релиза
+    permissions:
+      contents: write 
 
     steps:
-      # 1. Получаем репозиторий
-      - name: Check out repository
+      # 1. Получаем код вашего плагина Ore-Plugin
+      - name: 📥 Скачивание репозитория
         uses: actions/checkout@v4
 
-      # 2. Устанавливаем JDK 21 (Temurin)
-      - name: Set up JDK 21
+      # 2. Настраиваем Java (если плагин под старую версию MC, измените '21' на '17' или '8')
+      - name: ☕ Установка JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '21' 
           cache: 'maven'
 
-      # 3. Собираем плагин Maven
-      - name: Build with Maven
+      # 3. Собираем плагин
+      - name: 🛠️ Сборка плагина через Maven
         run: mvn -B package --file pom.xml
 
-      # 4. Загружаем готовый .jar как артефакт
-      - name: Upload build artifact
+      # 4. Сохраняем готовый .jar файл
+      - name: 📦 Сохранение .jar файла
         uses: actions/upload-artifact@v4
         with:
-          name: TreeFall
+          name: OrePlugin-Сборка
           path: target/*.jar
+
+      # 5. Создаем Релиз (Сработает ТОЛЬКО если вы запушите тег)
+      - name: 🚀 Создание GitHub Релиза
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: target/*.jar
+          name: 🚀 Релиз Ore-Plugin ${{ github.ref_name }}
+          body: |
+            ## ⛏️ Новая версия плагина Ore-Plugin!
+            
+            Версия: **${{ github.ref_name }}**
+            
+            Автоматическая сборка плагина завершена успешно. Готовый `.jar` файл прикреплен ниже в разделе **Assets**.
+            
+            ### 📝 Что нового:
+          generate_release_notes: true
