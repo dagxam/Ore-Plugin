@@ -1,34 +1,35 @@
-name: Maven CI (Java 21)
+name: Build with Maven (Java 21)
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
+    branches: [ "main" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # 1. Получаем репозиторий
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      # 2. Устанавливаем JDK 21 (Temurin)
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '21'
-          cache: maven
+          cache: 'maven'
 
-      - name: Show versions
-        run: |
-          java -version
-          mvn -v
-
+      # 3. Собираем плагин Maven
       - name: Build with Maven
-        run: mvn -B -DskipTests clean package
+        run: mvn -B package --file pom.xml
 
-      - name: Upload artifact
+      # 4. Загружаем готовый .jar как артефакт
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-jar
+          name: TreeFall
           path: target/*.jar
