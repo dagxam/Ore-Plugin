@@ -16,26 +16,14 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
 
-/**
- * Генератор рудных узлов.
- *
- * Генерация детерминированная: seed мира + координаты чанка дают стабильный
- * результат. В обычном мире дополнительно определяется слой местности:
- * остров, океан или глубокий океан. Множитель слоя применяется к плотности.
- *
- * Команды, permission и Bukkit Material остаются английскими.
- * Пользовательские настройки и технические сообщения — русские.
- */
+/** Генератор рудных узлов. */
 public class GenerationListener implements Listener {
     private static final long GENERATOR_SALT = 0x4F524556325F4F52L;
-
     private final Plugin plugin;
     private final NodeManager nodeManager;
-
     private boolean queueEnabled;
     private int chunksPerTick;
     private BukkitTask queueTask;
-
     private final ArrayDeque<long[]> chunkQueue = new ArrayDeque<>();
     private final Set<String> queuedKeys = new HashSet<>();
 
@@ -61,10 +49,7 @@ public class GenerationListener implements Listener {
 
     public void stopQueue() {
         if (queueTask != null) {
-            try {
-                queueTask.cancel();
-            } catch (Throwable ignored) {
-            }
+            try { queueTask.cancel(); } catch (Throwable ignored) { }
             queueTask = null;
         }
         chunkQueue.clear();
@@ -90,10 +75,8 @@ public class GenerationListener implements Listener {
             int cx = (int) entry[2];
             int cz = (int) entry[3];
             queuedKeys.remove(chunkKey(worldId, cx, cz));
-
             World world = Bukkit.getWorld(worldId);
             if (world == null || !isEnabledWorld(world) || !world.isChunkLoaded(cx, cz)) continue;
-
             Chunk chunk = world.getChunkAt(cx, cz);
             if (!nodeManager.isChunkProcessed(world, cx, cz)) {
                 generateInChunk(chunk);
@@ -103,34 +86,26 @@ public class GenerationListener implements Listener {
         }
     }
 
-    private static String chunkKey(UUID world, int cx, int cz) {
-        return world + ":" + cx + ":" + cz;
-    }
+    private static String chunkKey(UUID world, int cx, int cz) { return world + ":" + cx + ":" + cz; }
 
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent event) {
         World world = event.getWorld();
         if (!isEnabledWorld(world)) return;
-
         Chunk chunk = event.getChunk();
-        int cx = chunk.getX();
-        int cz = chunk.getZ();
-
+        int cx = chunk.getX(), cz = chunk.getZ();
         if (nodeManager.isChunkProcessed(world, cx, cz)) {
             nodeManager.processDueRespawnsInChunk(chunk);
             return;
         }
-
-        if (queueEnabled) {
-            offerChunk(chunk);
-        } else {
+        if (queueEnabled) offerChunk(chunk);
+        else {
             generateInChunk(chunk);
             nodeManager.markChunkProcessed(world, cx, cz);
             nodeManager.processDueRespawnsInChunk(chunk);
         }
     }
 
-    /** Генерирует рудные узлы в загруженном чанке. */
     public void generateInChunk(Chunk targetChunk) {
         if (targetChunk == null) return;
         World world = targetChunk.getWorld();
@@ -148,40 +123,31 @@ public class GenerationListener implements Listener {
         int spacing = Math.max(1, plugin.getConfig().getInt("генерация.жила.минимальная-дистанция", 4));
         double globalDensity = Math.max(0.0D, plugin.getConfig().getDouble("генерация.общий-множитель-плотности", 1.0D));
         double baseChance = Math.max(0.0D, plugin.getConfig().getDouble("генерация.шанс-на-блок", 0.008D));
-
         if (maxNodes <= 0 || attempts <= 0) return;
 
         List<OreProfile> profiles = loadProfiles(ores, environment, defaultMinSize, defaultMaxSize, globalDensity);
         if (profiles.isEmpty()) return;
-
         long seed = mixSeed(world.getSeed() ^ GENERATOR_SALT, targetChunk.getX(), targetChunk.getZ());
         SplittableRandom random = new SplittableRandom(seed);
         List<long[]> centers = new ArrayList<>();
-
-        int placedCenters = 0;
-        int inspected = 0;
-        int maxAttempts = Math.min(attempts, 10000);
-
-        int minProfileY = minY(profiles);
-        int maxProfileY = maxY(profiles);
+        int minProfileY = minY(profiles), maxProfileY = maxY(profiles);
         if (maxProfileY < minProfileY) return;
 
+        int placedCenters = 0, inspected = 0;
+        int maxAttempts = Math.min(attempts, 10000);
         while (inspected++ < maxAttempts && placedCenters < maxNodes) {
             int x = (targetChunk.getX() << 4) + random.nextInt(16);
             int z = (targetChunk.getZ() << 4) + random.nextInt(16);
             int y = minProfileY + random.nextInt(maxProfileY - minProfileY + 1);
-
             if (!world.isChunkLoaded(x >> 4, z >> 4)) continue;
             if (!isReplaceable(world.getBlockAt(x, y, z).getType(), environment)) continue;
             if (!farEnough(centers, x, y, z, spacing)) continue;
-
             OreProfile profile = rollProfile(profiles, random, y);
             if (profile == null) continue;
 
-            double layerDensity = environment == Environment.NORMAL ? layerDensity(world, x, z) :
-                    plugin.getConfig().getDouble("генерация.слои.ад.пещеры", 1.0D);
+            double layerDensity = environment == Environment.NORMAL ? layerDensity(world, x, z)
+                    : plugin.getConfig().getDouble("генерация.слои.ад.пещеры", 1.0D);
             if (layerDensity <= 0.0D) continue;
-
             double chance = Math.min(1.0D, baseChance * profile.density * layerDensity);
             if (placedCenters >= targetNodes && random.nextDouble() > chance * 8.0D) continue;
             if (placedCenters < targetNodes && random.nextDouble() > chance * 16.0D) continue;
@@ -195,119 +161,75 @@ public class GenerationListener implements Listener {
         }
     }
 
-    /**
-     * Определяет слой по поверхности, а не по Y руды.
-     * Поэтому одна и та же подземная область получает правильный множитель
-     * независимо от того, находится она под островом или под океаном.
-     */
     private double layerDensity(World world, int x, int z) {
         ConfigurationSection layers = plugin.getConfig().getConfigurationSection("генерация.слои.обычный-мир");
         if (layers == null || !layers.getBoolean("включено", true)) return 1.0D;
-
         int seaLevel = world.getSeaLevel();
         int surfaceY;
         Material surface;
         try {
             surfaceY = world.getHighestBlockYAt(x, z);
             surface = world.getBlockAt(x, surfaceY, z).getType();
-        } catch (RuntimeException ex) {
-            return 1.0D;
-        }
+        } catch (RuntimeException ex) { return 1.0D; }
 
-        // На поверхности вода означает океан. Если высшая точка заметно ниже уровня моря,
-        // считаем это глубоким океаном. Сухая поверхность выше уровня моря — остров.
-        if (surface == Material.WATER || surface == Material.KELP || surface == Material.KELP_PLANT
-                || surfaceY <= seaLevel - 12) {
-            if (surfaceY <= seaLevel - 12) {
-                return Math.max(0.0D, layers.getDouble("глубокий-океан", 0.70D));
-            }
-            return Math.max(0.0D, layers.getDouble("океан", 0.85D));
+        if (surface == Material.WATER || surface == Material.KELP || surface == Material.KELP_PLANT || surfaceY <= seaLevel - 12) {
+            return Math.max(0.0D, layers.getDouble(surfaceY <= seaLevel - 12 ? "глубокий-океан" : "океан", 0.70D));
         }
-
         return Math.max(0.0D, layers.getDouble("остров", 1.00D));
     }
 
-    private List<OreProfile> loadProfiles(ConfigurationSection ores,
-                                          Environment environment,
-                                          int defaultMinSize,
-                                          int defaultMaxSize,
-                                          double globalDensity) {
+    private List<OreProfile> loadProfiles(ConfigurationSection ores, Environment environment,
+                                          int defaultMinSize, int defaultMaxSize, double globalDensity) {
         List<OreProfile> profiles = new ArrayList<>();
-
         for (String key : ores.getKeys(false)) {
             ConfigurationSection section = ores.getConfigurationSection(key);
             if (section == null || !section.getBoolean("включено", true)) continue;
-
             Material material;
-            try {
-                material = Material.valueOf(key);
-            } catch (IllegalArgumentException ex) {
+            try { material = Material.valueOf(key); }
+            catch (IllegalArgumentException ex) {
                 plugin.getLogger().warning("Неизвестный материал в настройках руды: " + key);
                 continue;
             }
-
-            if (!isAllowedOreMaterial(material)) {
-                plugin.getLogger().warning("Материал запрещён для генерации руды: " + key);
-                continue;
-            }
-
+            if (!isAllowedOreMaterial(material)) continue;
             if (material == Material.NETHERITE_SCRAP && environment != Environment.NETHER) continue;
             if (material != Material.NETHERITE_SCRAP && environment == Environment.NETHER && key.startsWith("DEEPSLATE_")) continue;
-
             int weight = Math.max(0, section.getInt("вес", 1));
             int minSize = Math.max(1, section.getInt("размер-жилы-минимум", defaultMinSize));
             int maxSize = Math.max(minSize, section.getInt("размер-жилы-максимум", defaultMaxSize));
             int minY = section.getInt("минимальный-y", environment == Environment.NETHER ? 0 : -64);
             int maxY = section.getInt("максимальный-y", environment == Environment.NETHER ? 32 : 63);
             double density = Math.max(0.0D, section.getDouble("плотность", 1.0D) * globalDensity);
-
             if (weight <= 0 || maxY < minY || density <= 0.0D) continue;
             profiles.add(new OreProfile(material, weight, minSize, maxSize, minY, maxY, density));
         }
-
         if (profiles.isEmpty()) {
             String sectionName = environment == Environment.NETHER ? "веса-руд-ада" : "веса-руд";
             ConfigurationSection legacy = plugin.getConfig().getConfigurationSection(sectionName);
-            if (legacy != null) {
-                for (String key : legacy.getKeys(false)) {
-                    try {
-                        Material material = Material.valueOf(key);
-                        if (!isAllowedOreMaterial(material)) continue;
-                        if (material == Material.NETHERITE_SCRAP && environment != Environment.NETHER) continue;
-                        if (environment == Environment.NETHER && material.name().startsWith("DEEPSLATE_")) continue;
-                        int weight = legacy.getInt(key);
-                        if (weight > 0) {
-                            profiles.add(new OreProfile(material, weight, defaultMinSize, defaultMaxSize,
-                                    environment == Environment.NETHER ? 0 : -64,
-                                    environment == Environment.NETHER ? 32 : 63,
-                                    globalDensity));
-                        }
-                    } catch (IllegalArgumentException ignored) {
-                        plugin.getLogger().warning("Неизвестная руда в разделе " + sectionName + ": " + key);
-                    }
+            if (legacy != null) for (String key : legacy.getKeys(false)) {
+                try {
+                    Material material = Material.valueOf(key);
+                    if (!isAllowedOreMaterial(material)) continue;
+                    if (material == Material.NETHERITE_SCRAP && environment != Environment.NETHER) continue;
+                    if (environment == Environment.NETHER && material.name().startsWith("DEEPSLATE_")) continue;
+                    int weight = legacy.getInt(key);
+                    if (weight > 0) profiles.add(new OreProfile(material, weight, defaultMinSize, defaultMaxSize,
+                            environment == Environment.NETHER ? 0 : -64,
+                            environment == Environment.NETHER ? 32 : 63, globalDensity));
+                } catch (IllegalArgumentException ignored) {
+                    plugin.getLogger().warning("Неизвестная руда в разделе " + sectionName + ": " + key);
                 }
             }
         }
         return profiles;
     }
 
-    private int minY(List<OreProfile> profiles) {
-        int result = Integer.MAX_VALUE;
-        for (OreProfile p : profiles) result = Math.min(result, p.minY);
-        return result;
-    }
-
-    private int maxY(List<OreProfile> profiles) {
-        int result = Integer.MIN_VALUE;
-        for (OreProfile p : profiles) result = Math.max(result, p.maxY);
-        return result;
-    }
+    private int minY(List<OreProfile> profiles) { int result = Integer.MAX_VALUE; for (OreProfile p : profiles) result = Math.min(result, p.minY); return result; }
+    private int maxY(List<OreProfile> profiles) { int result = Integer.MIN_VALUE; for (OreProfile p : profiles) result = Math.max(result, p.maxY); return result; }
 
     private OreProfile rollProfile(List<OreProfile> profiles, SplittableRandom random, int y) {
         int total = 0;
         for (OreProfile p : profiles) if (y >= p.minY && y <= p.maxY) total += p.weight;
         if (total <= 0) return null;
-
         int roll = random.nextInt(total);
         for (OreProfile p : profiles) {
             if (y < p.minY || y > p.maxY) continue;
@@ -321,28 +243,21 @@ public class GenerationListener implements Listener {
                            int size, int minY, int maxY, Environment environment, SplittableRandom random) {
         List<long[]> vein = new ArrayList<>(size);
         vein.add(new long[]{startX, startY, startZ});
-
         int[][] directions = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
         for (int i = 1; i < size; i++) {
             long[] base = vein.get(random.nextInt(vein.size()));
             int[] direction = directions[random.nextInt(directions.length)];
-            int x = (int) base[0] + direction[0];
-            int y = (int) base[1] + direction[1];
-            int z = (int) base[2] + direction[2];
-            if (y < minY || y > maxY) continue;
-            if (!world.isChunkLoaded(x >> 4, z >> 4)) continue;
-            if (!isReplaceable(world.getBlockAt(x, y, z).getType(), environment)) continue;
-            if (contains(vein, x, y, z)) continue;
+            int x = (int) base[0] + direction[0], y = (int) base[1] + direction[1], z = (int) base[2] + direction[2];
+            if (y < minY || y > maxY || !world.isChunkLoaded(x >> 4, z >> 4)) continue;
+            if (!isReplaceable(world.getBlockAt(x, y, z).getType(), environment) || contains(vein, x, y, z)) continue;
             vein.add(new long[]{x, y, z});
         }
-
         int placed = 0;
         for (long[] pos : vein) {
             int x = (int) pos[0], y = (int) pos[1], z = (int) pos[2];
             if (!world.isChunkLoaded(x >> 4, z >> 4)) continue;
             if (!isReplaceable(world.getBlockAt(x, y, z).getType(), environment)) continue;
             if (nodeManager.isNode(world.getUID(), x, y, z)) continue;
-
             nodeManager.addNode(new Location(world, x, y, z), ore, nodeManager.randomHits());
             placed++;
         }
@@ -355,23 +270,27 @@ public class GenerationListener implements Listener {
     }
 
     private boolean farEnough(List<long[]> centers, int x, int y, int z, int spacing) {
-        int horizontal = spacing * spacing;
-        int vertical = Math.max(2, spacing / 2);
+        int horizontal = spacing * spacing, vertical = Math.max(2, spacing / 2);
         for (long[] center : centers) {
-            int dx = (int) center[0] - x;
-            int dy = (int) center[1] - y;
-            int dz = (int) center[2] - z;
+            int dx = (int) center[0] - x, dy = (int) center[1] - y, dz = (int) center[2] - z;
             if (dx * dx + dz * dz <= horizontal && Math.abs(dy) <= vertical) return false;
         }
         return true;
     }
 
+    /**
+     * Разрешённые блоки для замены рудой.
+     * В обычном мире разрешены каменные породы, песок и гравий.
+     * Воздух, вода и лава всегда запрещены.
+     */
     private boolean isReplaceable(Material material, Environment environment) {
+        if (material.isAir() || material == Material.WATER || material == Material.LAVA
+                || material == Material.BUBBLE_COLUMN) return false;
         if (environment == Environment.NETHER) {
             return material == Material.NETHERRACK || material == Material.BASALT || material == Material.BLACKSTONE;
         }
-
-        if (material == Material.STONE || material == Material.DEEPSLATE || material == Material.TUFF) return true;
+        if (material == Material.STONE || material == Material.DEEPSLATE || material == Material.TUFF
+                || material == Material.SAND || material == Material.RED_SAND || material == Material.GRAVEL) return true;
         if (!plugin.getConfig().getBoolean("генерация.обычный-мир.разрешить-варианты-камня", true)) return false;
         String name = material.name();
         return name.equals("ANDESITE") || name.equals("DIORITE") || name.equals("GRANITE");
@@ -395,13 +314,8 @@ public class GenerationListener implements Listener {
 
     private static final class OreProfile {
         final Material material;
-        final int weight;
-        final int minSize;
-        final int maxSize;
-        final int minY;
-        final int maxY;
+        final int weight, minSize, maxSize, minY, maxY;
         final double density;
-
         OreProfile(Material material, int weight, int minSize, int maxSize, int minY, int maxY, double density) {
             this.material = material;
             this.weight = weight;
