@@ -1,0 +1,37 @@
+name: Сборка BedrockOres
+
+on:
+  push:
+    branches:
+      - main
+      - 'dev/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Maven — Java 21
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v4
+
+      - name: Установка Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Сборка и проверка
+        run: mvn -B clean package
+
+      - name: Сохранение JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: BedrockOres
+          path: target/*.jar
+          if-no-files-found: error
