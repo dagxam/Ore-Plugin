@@ -11,6 +11,13 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Главный класс BedrockOres.
+ *
+ * Технические сообщения плагина выводятся на русском языке.
+ * Названия команд, API-ключи Bukkit и идентификаторы материалов
+ * остаются в стандартном английском виде для совместимости.
+ */
 public class BedrockOresPlugin extends JavaPlugin {
 
     private NodeManager nodeManager;
@@ -26,63 +33,95 @@ public class BedrockOresPlugin extends JavaPlugin {
         this.nodeManager = new NodeManager(this);
         nodeManager.load();
 
-        // применить визуалы (если включены)
-        if (getConfig().getBoolean("visual.server-solid.enabled", false)) {
+        // Применяем серверный внешний вид узлов, если он включён.
+        if (getConfig().getBoolean("визуал.серверный-блок.включено", false)) {
             int applied = nodeManager.applyServerVisualsForAllNodes(true);
-            getLogger().info("Server-solid visuals applied to nodes: " + applied);
+            getLogger().info("Серверный внешний вид применён к узлам: " + applied);
         }
 
         this.generationListener = new GenerationListener(this, nodeManager);
         Bukkit.getPluginManager().registerEvents(generationListener, this);
         Bukkit.getPluginManager().registerEvents(new OreListeners(this, nodeManager), this);
 
-        // периодическое сохранение: snapshot синхронно, запись async
-        long saveSeconds = Math.max(30L, getConfig().getLong("persistence.save-interval-seconds", 180L));
+        // Периодическое сохранение: создание снимка синхронно, запись — асинхронно.
+        long saveSeconds = Math.max(
+                30L,
+                getConfig().getLong("сохранение.интервал-секунд", 120L)
+        );
+
         asyncSaveTask = Bukkit.getScheduler().runTaskTimerAsynchronously(
                 this,
                 () -> {
                     try {
-                        Future<NodeManager.SaveSnapshot> f =
+                        Future<NodeManager.SaveSnapshot> future =
                                 Bukkit.getScheduler().callSyncMethod(this, nodeManager::createSnapshot);
 
-                        NodeManager.SaveSnapshot snap = f.get(2, TimeUnit.SECONDS);
-                        nodeManager.saveSnapshot(snap);
+                        NodeManager.SaveSnapshot snapshot = future.get(2, TimeUnit.SECONDS);
+                        nodeManager.saveSnapshot(snapshot);
                     } catch (Exception e) {
-                        getLogger().severe("Async save failed: " + e.getMessage());
+                        getLogger().severe("Не удалось сохранить данные рудных узлов: " + e.getMessage());
                     }
                 },
                 20L * saveSeconds,
                 20L * saveSeconds
         );
 
-        // тик респаунов
-        respawnTickTask = Bukkit.getScheduler().runTaskTimer(this, nodeManager::tickRespawns, 20L, 20L * 30L);
+        // Периодическая обработка респавнов.
+        respawnTickTask = Bukkit.getScheduler().runTaskTimer(
+                this,
+                nodeManager::tickRespawns,
+                20L,
+                20L * 30L
+        );
 
-        // очередь генерации
+        // Запускаем очередь генерации.
         generationListener.startQueueIfEnabled();
 
-        BedrockOresCommand cmd = new BedrockOresCommand(this, nodeManager, generationListener);
+        // Команда намеренно остаётся /bedrockores для совместимости.
+        BedrockOresCommand command = new BedrockOresCommand(
+                this,
+                nodeManager,
+                generationListener
+        );
+
         if (getCommand("bedrockores") != null) {
-            getCommand("bedrockores").setExecutor(cmd);
-            getCommand("bedrockores").setTabCompleter(cmd);
+            getCommand("bedrockores").setExecutor(command);
+            getCommand("bedrockores").setTabCompleter(command);
         }
 
-        getLogger().info("BedrockOres enabled.");
+        getLogger().info("BedrockOres успешно запущен.");
     }
 
     @Override
     public void onDisable() {
         try {
-            if (asyncSaveTask != null) asyncSaveTask.cancel();
-            if (respawnTickTask != null) respawnTickTask.cancel();
-            if (generationListener != null) generationListener.stopQueue();
+            if (asyncSaveTask != null) {
+                asyncSaveTask.cancel();
+            }
 
-            nodeManager.save(); // финально синхронно
+            if (respawnTickTask != null) {
+                respawnTickTask.cancel();
+            }
+
+            if (generationListener != null) {
+                generationListener.stopQueue();
+            }
+
+            if (nodeManager != null) {
+                nodeManager.save();
+            }
+
+            getLogger().info("BedrockOres остановлен. Данные сохранены.");
         } catch (Exception e) {
-            getLogger().severe("Failed to save nodes: " + e.getMessage());
+            getLogger().severe("Не удалось сохранить данные при остановке плагина: " + e.getMessage());
         }
     }
 
-    public NodeManager getNodeManager() { return nodeManager; }
-    public GenerationListener getGenerationListener() { return generationListener; }
+    public NodeManager getNodeManager() {
+        return nodeManager;
+    }
+
+    public GenerationListener getGenerationListener() {
+        return generationListener;
+    }
 }
