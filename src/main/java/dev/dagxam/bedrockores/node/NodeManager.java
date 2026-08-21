@@ -11,581 +11,111 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.Plugin;
 
 import java.io.File;
-import java.io.IOException;
+import java.sql.SQLException;
 import java.util.*;
 
-/**
- * Менеджер состояния рудных узлов.
- *
- * Команды, permission и идентификаторы Bukkit остаются английскими.
- * Все настройки и технические сообщения плагина используют русские ключи.
- *
- * Индексы по чанкам не позволяют выполнять полный перебор всех узлов
- * при работе с одним чанком.
- */
+/** Оптимизированный менеджер: SQLite, загрузка по чанкам и dirty-сохранение. */
 public final class NodeManager {
     private final Plugin plugin;
     private final Random rnd = new Random();
-
     private final Map<String, NodeData> nodes = new HashMap<>();
-    private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
     private final Map<String, RespawnData> respawns = new HashMap<>();
-
+    private final Map<UUID, Set<Long>> processedChunks = new HashMap<>();
     private final Map<UUID, Map<Long, Set<String>>> nodesByChunk = new HashMap<>();
     private final Map<UUID, Map<Long, Set<String>>> respawnsByChunk = new HashMap<>();
-
-    private final File dataFile;
+    private final Set<Long> loadedChunks = new HashSet<>();
+    private final Map<UUID, Set<Long>> dbProcessedCache = new HashMap<>();
+    private final Map<String, NodeEntry> dirtyNodes = new HashMap<>(), deletedNodes = new HashMap<>();
+    private final Map<String, RespawnEntry> dirtyRespawns = new HashMap<>(), deletedRespawns = new HashMap<>();
+    private final Set<ChunkEntry> dirtyProcessed = new HashSet<>();
     private final Set<String> warnedDisplayMaterials = new HashSet<>();
+    private final File legacyFile;
+    private NodeDatabase database;
 
-    public NodeManager(Plugin plugin) {
-        this.plugin = plugin;
-        this.dataFile = new File(plugin.getDataFolder(), "nodes.yml");
-    }
+    public NodeManager(Plugin plugin) { this.plugin = plugin; this.legacyFile = new File(plugin.getDataFolder(), "nodes.yml"); }
 
-    public static String key(Location loc) {
-        Objects.requireNonNull(loc, "loc");
-        Objects.requireNonNull(loc.getWorld(), "loc.world");
-        return key(loc.getWorld().getUID(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
-    }
-
-    public static String key(UUID worldId, int x, int y, int z) {
-        return worldId + ":" + x + ":" + y + ":" + z;
-    }
-
-    public static long chunkKey(int cx, int cz) {
-        return (((long) cx) << 32) ^ (cz & 0xffffffffL);
-    }
-
-    public boolean isNode(UUID worldId, int x, int y, int z) {
-        return nodes.containsKey(key(worldId, x, y, z));
-    }
-
-    public boolean isNode(Location loc) {
-        return loc != null && loc.getWorld() != null && nodes.containsKey(key(loc));
-    }
-
-    public NodeData getNode(Location loc) {
-        if (loc == null || loc.getWorld() == null) return null;
-        return nodes.get(key(loc));
-    }
-
-    public void addNode(Location loc, Material oreMaterial, int hits) {
-        if (loc == null || loc.getWorld() == null || oreMaterial == null) return;
-
-        int safeHits = Math.max(1, hits);
-        String nodeKey = key(loc);
-        NodeData previous = nodes.put(nodeKey, new NodeData(oreMaterial, safeHits, safeHits));
-        if (previous == null) indexAdd(loc);
-
-        Material toPlace = oreMaterial == Material.NETHERITE_SCRAP
-                ? Material.ANCIENT_DEBRIS
-                : oreMaterial;
-
-        if (serverSolidEnabled()) {
-            Material display = displayFor(oreMaterial);
-            if (display != null) toPlace = display;
-        }
-
-        loc.getBlock().setType(toPlace, false);
-    }
-
-    public void removeNode(Location loc) {
-        if (loc == null || loc.getWorld() == null) return;
-        String nodeKey = key(loc);
-        if (nodes.remove(nodeKey) != null) indexRemove(loc);
-    }
-
-    public void markChunkProcessed(World world, int cx, int cz) {
-        if (world == null) return;
-        processedChunks.computeIfAbsent(world.getUID(), ignored -> new HashSet<>())
-                .add(chunkKey(cx, cz));
-    }
-
-    public boolean isChunkProcessed(World world, int cx, int cz) {
-        if (world == null) return false;
-        Set<Long> set = processedChunks.get(world.getUID());
-        return set != null && set.contains(chunkKey(cx, cz));
-    }
-
-    public void clearProcessedFlags(World world) {
-        if (world != null) processedChunks.remove(world.getUID());
-    }
-
-    public void clearAllProcessedFlags() {
-        processedChunks.clear();
-    }
-
-    public int removeNodesInChunk(Chunk chunk) {
-        if (chunk == null) return 0;
-        UUID worldId = chunk.getWorld().getUID();
-        long ck = chunkKey(chunk.getX(), chunk.getZ());
-        Map<Long, Set<String>> index = nodesByChunk.get(worldId);
-        if (index == null) return 0;
-
-        Set<String> keys = index.remove(ck);
-        if (keys == null) return 0;
-
-        int removed = 0;
-        for (String k : new ArrayList<>(keys)) {
-            if (nodes.remove(k) != null) removed++;
-        }
-        if (index.isEmpty()) nodesByChunk.remove(worldId);
-        return removed;
-    }
-
-    public int removeRespawnsInChunk(Chunk chunk) {
-        if (chunk == null) return 0;
-        UUID worldId = chunk.getWorld().getUID();
-        long ck = chunkKey(chunk.getX(), chunk.getZ());
-        Map<Long, Set<String>> index = respawnsByChunk.get(worldId);
-        if (index == null) return 0;
-
-        Set<String> keys = index.remove(ck);
-        if (keys == null) return 0;
-
-        int removed = 0;
-        for (String k : new ArrayList<>(keys)) {
-            if (respawns.remove(k) != null) removed++;
-        }
-        if (index.isEmpty()) respawnsByChunk.remove(worldId);
-        return removed;
-    }
-
-    public void scheduleRespawn(Location loc, Material oreType) {
-        if (loc == null || loc.getWorld() == null || oreType == null) return;
-        if (!plugin.getConfig().getBoolean("возрождение.включено", true)) return;
-
-        long delaySeconds = Math.max(0L,
-                plugin.getConfig().getLong("возрождение.задержка-секунд", 3600L));
-        long dueAt = System.currentTimeMillis() + delaySeconds * 1000L;
-        String k = key(loc);
-
-        respawns.put(k, new RespawnData(oreType, dueAt));
-        indexRespawnAdd(loc);
-
-        if (plugin.getConfig().getBoolean("сохранение.сохранять-при-постановке-возрождения", false)) {
-            save();
-        }
-    }
-
-    public void tickRespawns() {
-        if (respawns.isEmpty()) return;
-        long now = System.currentTimeMillis();
-
-        for (Map.Entry<String, RespawnData> entry : new ArrayList<>(respawns.entrySet())) {
-            if (!entry.getValue().isDue(now)) continue;
-
-            Location loc = locationFromKey(entry.getKey());
-            if (loc == null || loc.getWorld() == null) {
-                removeRespawnKey(entry.getKey());
-                continue;
-            }
-
-            World world = loc.getWorld();
-            int cx = loc.getBlockX() >> 4;
-            int cz = loc.getBlockZ() >> 4;
-            if (!world.isChunkLoaded(cx, cz)) continue;
-
-            addNode(loc, entry.getValue().oreMaterial, randomHits());
-            removeRespawnKey(entry.getKey());
-        }
-    }
-
-    public void processDueRespawnsInChunk(Chunk chunk) {
-        if (chunk == null || respawns.isEmpty()) return;
-
-        UUID worldId = chunk.getWorld().getUID();
-        long ck = chunkKey(chunk.getX(), chunk.getZ());
-        Map<Long, Set<String>> index = respawnsByChunk.get(worldId);
-        if (index == null) return;
-
-        Set<String> keys = index.get(ck);
-        if (keys == null || keys.isEmpty()) return;
-
-        long now = System.currentTimeMillis();
-        for (String k : new ArrayList<>(keys)) {
-            RespawnData data = respawns.get(k);
-            if (data == null) {
-                keys.remove(k);
-                continue;
-            }
-            if (!data.isDue(now)) continue;
-
-            Location loc = locationFromKey(k);
-            if (loc == null) {
-                removeRespawnKey(k);
-                continue;
-            }
-
-            addNode(loc, data.oreMaterial, randomHits());
-            removeRespawnKey(k);
-        }
-
-        if (keys.isEmpty()) {
-            index.remove(ck);
-            if (index.isEmpty()) respawnsByChunk.remove(worldId);
-        }
-    }
-
-    private void removeRespawnKey(String key) {
-        RespawnData removed = respawns.remove(key);
-        if (removed == null) return;
-
-        String[] parts = splitKey(key);
-        if (parts == null) return;
-        try {
-            UUID world = UUID.fromString(parts[0]);
-            int x = Integer.parseInt(parts[1]);
-            int z = Integer.parseInt(parts[3]);
-            removeFromIndex(respawnsByChunk, world, chunkKey(x >> 4, z >> 4), key);
-        } catch (RuntimeException ignored) {
-        }
-    }
-
-    private Location locationFromKey(String key) {
-        String[] parts = splitKey(key);
-        if (parts == null) return null;
-        try {
-            World world = Bukkit.getWorld(UUID.fromString(parts[0]));
-            if (world == null) return null;
-            return new Location(world,
-                    Integer.parseInt(parts[1]),
-                    Integer.parseInt(parts[2]),
-                    Integer.parseInt(parts[3]));
-        } catch (RuntimeException ex) {
-            return null;
-        }
-    }
-
-    private static String[] splitKey(String key) {
-        if (key == null) return null;
-        String[] parts = key.split(":", -1);
-        return parts.length == 4 ? parts : null;
-    }
-
-    // =========================================================
-    // Загрузка / сохранение
-    // =========================================================
+    public static String key(Location l) { return key(l.getWorld().getUID(), l.getBlockX(), l.getBlockY(), l.getBlockZ()); }
+    public static String key(UUID w,int x,int y,int z){ return w+":"+x+":"+y+":"+z; }
+    public static long chunkKey(int x,int z){ return (((long)x)<<32) ^ (z & 0xffffffffL); }
+    private static long loadedKey(UUID w,int x,int z){ return chunkKey(w.hashCode() ^ x, z); }
 
     public void load() {
-        if (!dataFile.exists()) return;
-
-        YamlConfiguration yml = YamlConfiguration.loadConfiguration(dataFile);
-        nodes.clear();
-        respawns.clear();
-        processedChunks.clear();
-        nodesByChunk.clear();
-        respawnsByChunk.clear();
-
-        ConfigurationSection nodesSection = yml.getConfigurationSection("nodes");
-        if (nodesSection != null) {
-            for (String id : nodesSection.getKeys(false)) {
-                ConfigurationSection section = nodesSection.getConfigurationSection(id);
-                if (section == null) continue;
-                try {
-                    UUID world = UUID.fromString(Objects.requireNonNull(section.getString("world")));
-                    int x = section.getInt("x");
-                    int y = section.getInt("y");
-                    int z = section.getInt("z");
-                    Material type = Material.valueOf(Objects.requireNonNull(section.getString("type")));
-                    int hits = section.getInt("hits");
-                    int maxHits = section.getInt("maxHits", hits);
-                    nodes.put(key(world, x, y, z), new NodeData(type, hits, maxHits));
-                } catch (Exception ignored) {
-                }
-            }
-        }
-
-        // Старый формат nodes.yml сохраняется без изменений.
-        ConfigurationSection processedSection = yml.getConfigurationSection("processedChunks");
-        if (processedSection != null) {
-            for (String worldName : processedSection.getKeys(false)) {
-                try {
-                    UUID world = UUID.fromString(worldName);
-                    Set<Long> set = new HashSet<>();
-                    for (String entry : processedSection.getStringList(worldName)) {
-                        String[] parts = entry.split(":", -1);
-                        if (parts.length != 2) continue;
-                        set.add(chunkKey(Integer.parseInt(parts[0]), Integer.parseInt(parts[1])));
-                    }
-                    processedChunks.put(world, set);
-                } catch (Exception ignored) {
-                }
-            }
-        }
-
-        ConfigurationSection respawnSection = yml.getConfigurationSection("respawns");
-        if (respawnSection != null) {
-            for (String id : respawnSection.getKeys(false)) {
-                ConfigurationSection section = respawnSection.getConfigurationSection(id);
-                if (section == null) continue;
-                try {
-                    UUID world = UUID.fromString(Objects.requireNonNull(section.getString("world")));
-                    int x = section.getInt("x");
-                    int y = section.getInt("y");
-                    int z = section.getInt("z");
-                    Material type = Material.valueOf(Objects.requireNonNull(section.getString("type")));
-                    long dueAt = section.getLong("dueAt");
-                    respawns.put(key(world, x, y, z), new RespawnData(type, dueAt));
-                } catch (Exception ignored) {
-                }
-            }
-        }
-
-        rebuildIndex();
-        plugin.getLogger().info("Загружено рудных узлов: " + nodes.size()
-                + "; ожидает возрождения: " + respawns.size()
-                + "; миров с обработанными чанками: " + processedChunks.size());
-    }
-
-    public record NodeEntry(UUID world, int x, int y, int z, Material type, int hits, int maxHits) {}
-    public record RespawnEntry(UUID world, int x, int y, int z, Material type, long dueAtMillis) {}
-    public record SaveSnapshot(List<NodeEntry> nodes,
-                               Map<UUID, List<String>> processedChunks,
-                               List<RespawnEntry> respawns) {}
-
-    public SaveSnapshot createSnapshot() {
-        List<NodeEntry> nodeList = new ArrayList<>(nodes.size());
-        for (Map.Entry<String, NodeData> entry : nodes.entrySet()) {
-            String[] p = splitKey(entry.getKey());
-            if (p == null) continue;
-            try {
-                NodeData data = entry.getValue();
-                nodeList.add(new NodeEntry(
-                        UUID.fromString(p[0]),
-                        Integer.parseInt(p[1]),
-                        Integer.parseInt(p[2]),
-                        Integer.parseInt(p[3]),
-                        data.oreMaterial,
-                        data.hitsRemaining,
-                        data.maxHits
-                ));
-            } catch (RuntimeException ignored) {
-            }
-        }
-
-        Map<UUID, List<String>> processed = new HashMap<>();
-        for (Map.Entry<UUID, Set<Long>> entry : processedChunks.entrySet()) {
-            List<String> list = new ArrayList<>(entry.getValue().size());
-            for (Long value : entry.getValue()) {
-                int cx = (int) (value >> 32);
-                int cz = (int) value.longValue();
-                list.add(cx + ":" + cz);
-            }
-            processed.put(entry.getKey(), list);
-        }
-
-        List<RespawnEntry> respawnList = new ArrayList<>(respawns.size());
-        for (Map.Entry<String, RespawnData> entry : respawns.entrySet()) {
-            String[] p = splitKey(entry.getKey());
-            if (p == null) continue;
-            try {
-                RespawnData data = entry.getValue();
-                respawnList.add(new RespawnEntry(
-                        UUID.fromString(p[0]),
-                        Integer.parseInt(p[1]),
-                        Integer.parseInt(p[2]),
-                        Integer.parseInt(p[3]),
-                        data.oreMaterial,
-                        data.dueAtMillis
-                ));
-            } catch (RuntimeException ignored) {
-            }
-        }
-
-        return new SaveSnapshot(nodeList, processed, respawnList);
-    }
-
-    public void saveSnapshot(SaveSnapshot snapshot) {
-        YamlConfiguration yml = new YamlConfiguration();
-
-        int nodeIndex = 0;
-        for (NodeEntry node : snapshot.nodes()) {
-            String path = "nodes.n" + nodeIndex++;
-            yml.set(path + ".world", node.world().toString());
-            yml.set(path + ".x", node.x());
-            yml.set(path + ".y", node.y());
-            yml.set(path + ".z", node.z());
-            yml.set(path + ".type", node.type().name());
-            yml.set(path + ".hits", node.hits());
-            yml.set(path + ".maxHits", node.maxHits());
-        }
-
-        for (Map.Entry<UUID, List<String>> entry : snapshot.processedChunks().entrySet()) {
-            yml.set("processedChunks." + entry.getKey(), entry.getValue());
-        }
-
-        int respawnIndex = 0;
-        for (RespawnEntry respawn : snapshot.respawns()) {
-            String path = "respawns.r" + respawnIndex++;
-            yml.set(path + ".world", respawn.world().toString());
-            yml.set(path + ".x", respawn.x());
-            yml.set(path + ".y", respawn.y());
-            yml.set(path + ".z", respawn.z());
-            yml.set(path + ".type", respawn.type().name());
-            yml.set(path + ".dueAt", respawn.dueAtMillis());
-        }
-
         try {
-            File parent = dataFile.getParentFile();
-            if (parent != null && !parent.exists() && !parent.mkdirs()) {
-                plugin.getLogger().warning("Не удалось создать папку данных плагина: " + parent);
-            }
-            yml.save(dataFile);
-        } catch (IOException ex) {
-            plugin.getLogger().severe("Не удалось сохранить nodes.yml: " + ex.getMessage());
-        }
+            if (!plugin.getDataFolder().exists() && !plugin.getDataFolder().mkdirs()) throw new IllegalStateException("Не удалось создать папку данных");
+            database = new NodeDatabase(plugin);
+            if (legacyFile.exists()) migrateLegacyYaml();
+            plugin.getLogger().info("Хранилище рудных узлов SQLite готово. Узлы будут загружаться по мере загрузки чанков.");
+        } catch (Exception ex) { throw new IllegalStateException("Не удалось открыть SQLite-хранилище BedrockOres", ex); }
     }
 
-    public void save() {
-        saveSnapshot(createSnapshot());
+    private void migrateLegacyYaml() throws Exception {
+        YamlConfiguration y = YamlConfiguration.loadConfiguration(legacyFile);
+        List<NodeEntry> ns=new ArrayList<>(); List<RespawnEntry> rs=new ArrayList<>(); List<ChunkEntry> pcs=new ArrayList<>();
+        ConfigurationSection n=y.getConfigurationSection("nodes");
+        if(n!=null) for(String id:n.getKeys(false)){ ConfigurationSection s=n.getConfigurationSection(id); if(s==null)continue; try{UUID w=UUID.fromString(Objects.requireNonNull(s.getString("world"))); int x=s.getInt("x"),yy=s.getInt("y"),z=s.getInt("z"),h=s.getInt("hits"); ns.add(new NodeEntry(w,x,yy,z,Material.valueOf(Objects.requireNonNull(s.getString("type"))),h,s.getInt("maxHits",h)));}catch(Exception ignored){} }
+        ConfigurationSection r=y.getConfigurationSection("respawns");
+        if(r!=null) for(String id:r.getKeys(false)){ ConfigurationSection s=r.getConfigurationSection(id); if(s==null)continue; try{rs.add(new RespawnEntry(UUID.fromString(Objects.requireNonNull(s.getString("world"))),s.getInt("x"),s.getInt("y"),s.getInt("z"),Material.valueOf(Objects.requireNonNull(s.getString("type"))),s.getLong("dueAt")));}catch(Exception ignored){} }
+        ConfigurationSection p=y.getConfigurationSection("processedChunks");
+        if(p!=null) for(String ws:p.getKeys(false)) try{UUID w=UUID.fromString(ws); for(String v:p.getStringList(ws)){String[] a=v.split(":"); if(a.length==2) pcs.add(new ChunkEntry(w,Integer.parseInt(a[0]),Integer.parseInt(a[1])));}}catch(Exception ignored){}
+        database.saveDirty(ns,List.of(),rs,List.of(),pcs);
+        File backup=new File(legacyFile.getParentFile(),"nodes.yml.migrated-backup"); if(!legacyFile.renameTo(backup)) plugin.getLogger().warning("SQLite-миграция завершена, но старый nodes.yml не удалось переименовать.");
+        plugin.getLogger().info("Перенесено в SQLite: узлов="+ns.size()+", респавнов="+rs.size()+", чанков="+pcs.size());
     }
 
-    // =========================================================
-    // Индексы
-    // =========================================================
-
-    private void indexAdd(Location loc) {
-        UUID world = loc.getWorld().getUID();
-        long chunk = chunkKey(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
-        nodesByChunk.computeIfAbsent(world, ignored -> new HashMap<>())
-                .computeIfAbsent(chunk, ignored -> new HashSet<>())
-                .add(key(loc));
-    }
-
-    private void indexRemove(Location loc) {
-        if (loc == null || loc.getWorld() == null) return;
-        removeFromIndex(nodesByChunk,
-                loc.getWorld().getUID(),
-                chunkKey(loc.getBlockX() >> 4, loc.getBlockZ() >> 4),
-                key(loc));
-    }
-
-    private void indexRespawnAdd(Location loc) {
-        UUID world = loc.getWorld().getUID();
-        long chunk = chunkKey(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
-        respawnsByChunk.computeIfAbsent(world, ignored -> new HashMap<>())
-                .computeIfAbsent(chunk, ignored -> new HashSet<>())
-                .add(key(loc));
-    }
-
-    private static void removeFromIndex(Map<UUID, Map<Long, Set<String>>> index,
-                                        UUID world,
-                                        long chunk,
-                                        String key) {
-        Map<Long, Set<String>> byChunk = index.get(world);
-        if (byChunk == null) return;
-        Set<String> keys = byChunk.get(chunk);
-        if (keys == null) return;
-        keys.remove(key);
-        if (keys.isEmpty()) byChunk.remove(chunk);
-        if (byChunk.isEmpty()) index.remove(world);
-    }
-
-    private void rebuildIndex() {
-        nodesByChunk.clear();
-        respawnsByChunk.clear();
-
-        for (String k : nodes.keySet()) {
-            String[] p = splitKey(k);
-            if (p == null) continue;
+    public void loadChunkAsync(Chunk chunk, Runnable done) {
+        if(chunk==null||database==null){done.run();return;} UUID w=chunk.getWorld().getUID(); int cx=chunk.getX(),cz=chunk.getZ(); long lk=loadedKey(w,cx,cz);
+        if(loadedChunks.contains(lk)){done.run();return;}
+        Bukkit.getScheduler().runTaskAsynchronously(plugin,()->{
             try {
-                UUID world = UUID.fromString(p[0]);
-                int x = Integer.parseInt(p[1]);
-                int z = Integer.parseInt(p[3]);
-                nodesByChunk.computeIfAbsent(world, ignored -> new HashMap<>())
-                        .computeIfAbsent(chunkKey(x >> 4, z >> 4), ignored -> new HashSet<>())
-                        .add(k);
-            } catch (RuntimeException ignored) {
-            }
-        }
-
-        for (String k : respawns.keySet()) {
-            String[] p = splitKey(k);
-            if (p == null) continue;
-            try {
-                UUID world = UUID.fromString(p[0]);
-                int x = Integer.parseInt(p[1]);
-                int z = Integer.parseInt(p[3]);
-                respawnsByChunk.computeIfAbsent(world, ignored -> new HashMap<>())
-                        .computeIfAbsent(chunkKey(x >> 4, z >> 4), ignored -> new HashSet<>())
-                        .add(k);
-            } catch (RuntimeException ignored) {
-            }
-        }
+                List<NodeEntry> ns=database.loadNodes(w,cx,cz); List<RespawnEntry> rs=database.loadDueRespawns(w,cx,cz,System.currentTimeMillis()); boolean processed=database.isProcessed(w,cx,cz);
+                Bukkit.getScheduler().runTask(plugin,()->{ if(!chunk.getWorld().isChunkLoaded(cx,cz))return; applyLoadedChunk(w,cx,cz,ns,rs,processed); done.run(); });
+            } catch(Exception ex){ plugin.getLogger().severe("Не удалось загрузить данные чанка "+cx+","+cz+": "+ex.getMessage()); Bukkit.getScheduler().runTask(plugin,done); }
+        });
     }
-
-    // =========================================================
-    // Игровые параметры и визуализация
-    // =========================================================
-
-    /** Используется генератором для определения прочности нового узла. */
-    public int randomHits() {
-        int min = Math.max(1, plugin.getConfig().getInt("узел.ударов-минимум", 9));
-        int max = Math.max(min, plugin.getConfig().getInt("узел.ударов-максимум", 20));
-        return min + rnd.nextInt(max - min + 1);
+    private void applyLoadedChunk(UUID w,int cx,int cz,List<NodeEntry> ns,List<RespawnEntry> rs,boolean processed){
+        long ck=chunkKey(cx,cz); for(NodeEntry e:ns){String k=key(e.world(),e.x(),e.y(),e.z()); nodes.put(k,new NodeData(e.type(),e.hits(),e.maxHits())); index(nodesByChunk,w,ck,k);} for(RespawnEntry e:rs){String k=key(e.world(),e.x(),e.y(),e.z()); respawns.put(k,new RespawnData(e.type(),e.dueAtMillis())); index(respawnsByChunk,w,ck,k);} if(processed){processedChunks.computeIfAbsent(w,a->new HashSet<>()).add(ck);dbProcessedCache.computeIfAbsent(w,a->new HashSet<>()).add(ck);} loadedChunks.add(loadedKey(w,cx,cz));
     }
+    public void unloadChunk(Chunk c){ if(c==null)return; UUID w=c.getWorld().getUID(); long ck=chunkKey(c.getX(),c.getZ()); removeChunkMaps(nodes,nodesByChunk,w,ck); removeChunkMaps(respawns,respawnsByChunk,w,ck); loadedChunks.remove(loadedKey(w,c.getX(),c.getZ())); }
+    private static void removeChunkMaps(Map<String,?> data,Map<UUID,Map<Long,Set<String>>> idx,UUID w,long ck){Map<Long,Set<String>> m=idx.get(w);if(m==null)return;Set<String>s=m.remove(ck);if(s!=null)for(String k:s)data.remove(k);if(m.isEmpty())idx.remove(w);}
 
-    private boolean serverSolidEnabled() {
-        return plugin.getConfig().getBoolean("визуал.серверный-блок.включено", false);
+    public boolean isNode(UUID w,int x,int y,int z){return nodes.containsKey(key(w,x,y,z));}
+    public boolean isNode(Location l){return l!=null&&l.getWorld()!=null&&nodes.containsKey(key(l));}
+    public NodeData getNode(Location l){return l==null||l.getWorld()==null?null:nodes.get(key(l));}
+    public void addNode(Location l,Material ore,int hits){if(l==null||l.getWorld()==null||ore==null)return;String k=key(l);int h=Math.max(1,hits);nodes.put(k,new NodeData(ore,h,h));index(nodesByChunk,l.getWorld().getUID(),chunkKey(l.getBlockX()>>4,l.getBlockZ()>>4),k);NodeEntry e=new NodeEntry(l.getWorld().getUID(),l.getBlockX(),l.getBlockY(),l.getBlockZ(),ore,h,h);dirtyNodes.put(k,e);deletedNodes.remove(k);Material p=ore==Material.NETHERITE_SCRAP?Material.ANCIENT_DEBRIS:ore;if(serverSolidEnabled()){Material d=displayFor(ore);if(d!=null)p=d;}l.getBlock().setType(p,false);}
+    public void removeNode(Location l){if(l==null||l.getWorld()==null)return;String k=key(l);NodeData d=nodes.remove(k);if(d!=null){removeIndex(nodesByChunk,l.getWorld().getUID(),chunkKey(l.getBlockX()>>4,l.getBlockZ()>>4),k);deletedNodes.put(k,new NodeEntry(l.getWorld().getUID(),l.getBlockX(),l.getBlockY(),l.getBlockZ(),d.oreMaterial,d.hitsRemaining,d.maxHits));dirtyNodes.remove(k);}}
+
+    public void markChunkProcessed(World w,int x,int z){if(w==null)return;long ck=chunkKey(x,z);processedChunks.computeIfAbsent(w.getUID(),a->new HashSet<>()).add(ck);dbProcessedCache.computeIfAbsent(w.getUID(),a->new HashSet<>()).add(ck);dirtyProcessed.add(new ChunkEntry(w.getUID(),x,z));}
+    public boolean isChunkProcessed(World w,int x,int z){if(w==null)return false;Set<Long>s=processedChunks.get(w.getUID());return s!=null&&s.contains(chunkKey(x,z));}
+    public void clearProcessedFlags(World w){if(w!=null)processedChunks.remove(w.getUID());}
+    public void clearAllProcessedFlags(){processedChunks.clear();}
+    public int removeNodesInChunk(Chunk c){if(c==null)return 0;Map<Long,Set<String>> m=nodesByChunk.get(c.getWorld().getUID());if(m==null)return 0;Set<String>s=m.get(chunkKey(c.getX(),c.getZ()));if(s==null)return 0;int n=0;for(String k:new ArrayList<>(s)){NodeData d=nodes.remove(k);if(d!=null)n++;}m.remove(chunkKey(c.getX(),c.getZ()));return n;}
+    public int removeRespawnsInChunk(Chunk c){if(c==null)return 0;Map<Long,Set<String>>m=respawnsByChunk.get(c.getWorld().getUID());if(m==null)return 0;Set<String>s=m.get(chunkKey(c.getX(),c.getZ()));if(s==null)return 0;int n=0;for(String k:new ArrayList<>(s))if(respawns.remove(k)!=null)n++;m.remove(chunkKey(c.getX(),c.getZ()));return n;}
+
+    public void scheduleRespawn(Location l,Material ore){if(l==null||l.getWorld()==null||ore==null||!plugin.getConfig().getBoolean("возрождение.включено",true))return;long due=System.currentTimeMillis()+Math.max(0L,plugin.getConfig().getLong("возрождение.задержка-секунд",3600L))*1000L;String k=key(l);RespawnData d=new RespawnData(ore,due);respawns.put(k,d);index(respawnsByChunk,l.getWorld().getUID(),chunkKey(l.getBlockX()>>4,l.getBlockZ()>>4),k);dirtyRespawns.put(k,new RespawnEntry(l.getWorld().getUID(),l.getBlockX(),l.getBlockY(),l.getBlockZ(),ore,due));deletedRespawns.remove(k);}
+    public void tickRespawns(){long now=System.currentTimeMillis();for(String k:new ArrayList<>(respawns.keySet())){RespawnData d=respawns.get(k);if(d==null||!d.isDue(now))continue;Location l=locationFromKey(k);if(l==null||!l.getWorld().isChunkLoaded(l.getBlockX()>>4,l.getBlockZ()>>4))continue;addNode(l,d.oreMaterial,randomHits());removeRespawn(k,l,d);}}
+    public void processDueRespawnsInChunk(Chunk c){if(c==null)return;loadChunkAsync(c,()->tickRespawns());}
+    private void removeRespawn(String k,Location l,RespawnData d){respawns.remove(k);removeIndex(respawnsByChunk,l.getWorld().getUID(),chunkKey(l.getBlockX()>>4,l.getBlockZ()>>4),k);deletedRespawns.put(k,new RespawnEntry(l.getWorld().getUID(),l.getBlockX(),l.getBlockY(),l.getBlockZ(),d.oreMaterial,d.dueAtMillis));dirtyRespawns.remove(k);}
+
+    public record NodeEntry(UUID world,int x,int y,int z,Material type,int hits,int maxHits){}
+    public record RespawnEntry(UUID world,int x,int y,int z,Material type,long dueAtMillis){}
+    public record ChunkEntry(UUID world,int x,int z){}
+    public record SaveSnapshot(List<NodeEntry> nodes,Map<UUID,List<String>> processedChunks,List<RespawnEntry> respawns){}
+    public SaveSnapshot createSnapshot(){return new SaveSnapshot(List.of(),Map.of(),List.of());}
+    public void saveSnapshot(SaveSnapshot ignored){save();}
+    public void save(){
+        if(database==null)return; List<NodeEntry> upN;List<NodeEntry>delN;List<RespawnEntry>upR;List<RespawnEntry>delR;List<ChunkEntry>pc;
+        synchronized(this){upN=new ArrayList<>(dirtyNodes.values());delN=new ArrayList<>(deletedNodes.values());upR=new ArrayList<>(dirtyRespawns.values());delR=new ArrayList<>(deletedRespawns.values());pc=new ArrayList<>(dirtyProcessed);dirtyNodes.clear();deletedNodes.clear();dirtyRespawns.clear();deletedRespawns.clear();dirtyProcessed.clear();}
+        if(upN.isEmpty()&&delN.isEmpty()&&upR.isEmpty()&&delR.isEmpty()&&pc.isEmpty())return;
+        try{database.saveDirty(upN,delN,upR,delR,pc);}catch(Exception ex){plugin.getLogger().severe("Не удалось сохранить изменённые данные руд: "+ex.getMessage());synchronized(this){for(NodeEntry e:upN)dirtyNodes.put(key(e.world(),e.x(),e.y(),e.z()),e);for(NodeEntry e:delN)deletedNodes.put(key(e.world(),e.x(),e.y(),e.z()),e);for(RespawnEntry e:upR)dirtyRespawns.put(key(e.world(),e.x(),e.y(),e.z()),e);for(RespawnEntry e:delR)deletedRespawns.put(key(e.world(),e.x(),e.y(),e.z()),e);dirtyProcessed.addAll(pc);}}
     }
+    public void close(){save();try{if(database!=null)database.close();}catch(SQLException ex){plugin.getLogger().warning("Не удалось закрыть SQLite: "+ex.getMessage());}}
 
-    private Material displayFor(Material oreMaterial) {
-        String path = "визуал.серверный-блок.соответствия." + oreMaterial.name();
-        String raw = plugin.getConfig().getString(path);
-        if (raw == null || raw.isBlank()) return null;
-
-        try {
-            Material material = Material.valueOf(raw.toUpperCase(Locale.ROOT));
-            if (!material.isBlock()) {
-                warnOnce("Визуальный материал не является блоком: " + raw);
-                return null;
-            }
-            return material;
-        } catch (IllegalArgumentException ex) {
-            warnOnce("Неизвестный визуальный материал: " + raw + " для " + oreMaterial);
-            return null;
-        }
-    }
-
-    private void warnOnce(String message) {
-        if (warnedDisplayMaterials.add(message)) plugin.getLogger().warning(message);
-    }
-
-    public int applyServerVisualsInWorld(World world, boolean loadedChunksOnly) {
-        if (world == null || !serverSolidEnabled()) return 0;
-        Map<Long, Set<String>> byChunk = nodesByChunk.get(world.getUID());
-        if (byChunk == null) return 0;
-
-        int count = 0;
-        for (Set<String> keys : new ArrayList<>(byChunk.values())) {
-            for (String k : new ArrayList<>(keys)) {
-                NodeData data = nodes.get(k);
-                if (data == null) continue;
-                String[] p = splitKey(k);
-                if (p == null) continue;
-                try {
-                    int x = Integer.parseInt(p[1]);
-                    int y = Integer.parseInt(p[2]);
-                    int z = Integer.parseInt(p[3]);
-                    if (loadedChunksOnly && !world.isChunkLoaded(x >> 4, z >> 4)) continue;
-                    Material display = displayFor(data.oreMaterial);
-                    if (display == null) continue;
-                    Block block = world.getBlockAt(x, y, z);
-                    if (block.getType() != display) block.setType(display, false);
-                    count++;
-                } catch (RuntimeException ignored) {
-                }
-            }
-        }
-        return count;
-    }
-
-    public int applyServerVisualsForAllNodes(boolean loadedChunksOnly) {
-        int total = 0;
-        for (World world : Bukkit.getWorlds()) {
-            total += applyServerVisualsInWorld(world, loadedChunksOnly);
-        }
-        return total;
-    }
+    private static void index(Map<UUID,Map<Long,Set<String>>>i,UUID w,long c,String k){i.computeIfAbsent(w,a->new HashMap<>()).computeIfAbsent(c,a->new HashSet<>()).add(k);}
+    private static void removeIndex(Map<UUID,Map<Long,Set<String>>>i,UUID w,long c,String k){Map<Long,Set<String>>m=i.get(w);if(m==null)return;Set<String>s=m.get(c);if(s==null)return;s.remove(k);if(s.isEmpty())m.remove(c);if(m.isEmpty())i.remove(w);}
+    private Location locationFromKey(String k){String[]p=k.split(":");if(p.length!=4)return null;try{World w=Bukkit.getWorld(UUID.fromString(p[0]));return w==null?null:new Location(w,Integer.parseInt(p[1]),Integer.parseInt(p[2]),Integer.parseInt(p[3]));}catch(Exception e){return null;}}
+    public int randomHits(){int min=Math.max(1,plugin.getConfig().getInt("узел.ударов-минимум",9));int max=Math.max(min,plugin.getConfig().getInt("узел.ударов-максимум",20));return min+rnd.nextInt(max-min+1);}
+    private boolean serverSolidEnabled(){return plugin.getConfig().getBoolean("визуал.серверный-блок.включено",false);}
+    private Material displayFor(Material ore){String raw=plugin.getConfig().getString("визуал.серверный-блок.соответствия."+ore.name());if(raw==null||raw.isBlank())return null;try{Material m=Material.valueOf(raw.toUpperCase(Locale.ROOT));return m.isBlock()?m:null;}catch(Exception e){if(warnedDisplayMaterials.add(raw))plugin.getLogger().warning("Неизвестный визуальный материал: "+raw);return null;}}
+    public int applyServerVisualsInWorld(World w,boolean loadedOnly){if(w==null||!serverSolidEnabled())return 0;Map<Long,Set<String>>m=nodesByChunk.get(w.getUID());if(m==null)return 0;int n=0;for(Set<String>s:m.values())for(String k:s){NodeData d=nodes.get(k);Location l=locationFromKey(k);if(d==null||l==null||loadedOnly&&!w.isChunkLoaded(l.getBlockX()>>4,l.getBlockZ()>>4))continue;Material v=displayFor(d.oreMaterial);if(v!=null){l.getBlock().setType(v,false);n++;}}return n;}
+    public int applyServerVisualsForAllNodes(boolean loadedOnly){int n=0;for(World w:Bukkit.getWorlds())n+=applyServerVisualsInWorld(w,loadedOnly);return n;}
 }
