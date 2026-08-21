@@ -11,8 +11,12 @@ import org.bukkit.util.StringUtil;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Административные команды BedrockOres.
+ * Имена команд и permission намеренно остаются английскими.
+ * Текст сообщений полностью русифицирован.
+ */
 public class BedrockOresCommand implements CommandExecutor, TabCompleter {
-
     private final BedrockOresPlugin plugin;
     private final NodeManager nodeManager;
     private final GenerationListener generation;
@@ -26,51 +30,52 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
         if (!sender.hasPermission("bedrockores.admin")) {
-            sender.sendMessage("§cНет прав.");
+            sender.sendMessage("§cУ вас нет прав для выполнения этой команды.");
             return true;
         }
 
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
-            sender.sendMessage("§e/bedrockores reload §7- перезагрузить конфиг и генерацию (включая очередь)");
-            sender.sendMessage("§e/bedrockores clearflags [мир|all] §7- очистить флаги обработанных чанков");
-            sender.sendMessage("§e/bedrockores regenloaded [мир|all] §7- перегенерировать узлы в загруженных чанках");
-            sender.sendMessage("§e/bedrockores restartgen [мир|all] §7- clearflags + regenloaded");
-            sender.sendMessage("§e/bedrockores applyvisuals [мир|all] [force] §7- применить «цельный» вид к узлам в загруженных чанках");
+            sender.sendMessage("§e/bedrockores reload §7— перезагрузить конфигурацию и генерацию");
+            sender.sendMessage("§e/bedrockores clearflags [мир|all] §7— очистить флаги обработанных чанков");
+            sender.sendMessage("§e/bedrockores regenloaded [мир|all] §7— перегенерировать руды в загруженных чанках");
+            sender.sendMessage("§e/bedrockores restartgen [мир|all] §7— полностью перезапустить генерацию");
+            sender.sendMessage("§e/bedrockores applyvisuals [мир|all] [force] §7— применить серверный внешний вид руд");
             return true;
         }
 
         String sub = args[0].toLowerCase();
         switch (sub) {
-            case "reload": {
+            case "reload":
                 plugin.reloadConfig();
-                generation.reloadSettings(); // <<< перезапускаем веса + очередь
-                sender.sendMessage("§aКонфиг и параметры генерации/очереди перезагружены.");
+                generation.reloadSettings();
+                sender.sendMessage("§aКонфигурация, параметры генерации и очередь успешно перезагружены.");
                 return true;
-            }
+
             case "clearflags": {
                 List<World> targets = resolveWorlds(args, 1);
                 if (targets.isEmpty()) {
-                    sender.sendMessage("§cМир не найден или не включён в enabled-worlds.");
+                    sender.sendMessage("§cМир не найден или не разрешён в настройках плагина.");
                     return true;
                 }
-                for (World w : targets) nodeManager.clearProcessedFlags(w);
+                for (World world : targets) nodeManager.clearProcessedFlags(world);
                 nodeManager.save();
-                sender.sendMessage("§aОчищены флаги обработанных чанков для: §f" + names(targets));
+                sender.sendMessage("§aФлаги обработанных чанков очищены для: §f" + names(targets));
                 return true;
             }
+
             case "regenloaded": {
                 List<World> targets = resolveWorlds(args, 1);
                 if (targets.isEmpty()) {
-                    sender.sendMessage("§cМир не найден или не включён в enabled-worlds.");
+                    sender.sendMessage("§cМир не найден или не разрешён в настройках плагина.");
                     return true;
                 }
                 int chunks = 0;
-                for (World w : targets) {
-                    for (Chunk c : w.getLoadedChunks()) {
-                        nodeManager.removeRespawnsInChunk(c);
-                        nodeManager.removeNodesInChunk(c);
-                        generation.generateInChunk(c);
-                        nodeManager.markChunkProcessed(w, c.getX(), c.getZ());
+                for (World world : targets) {
+                    for (Chunk chunk : world.getLoadedChunks()) {
+                        nodeManager.removeRespawnsInChunk(chunk);
+                        nodeManager.removeNodesInChunk(chunk);
+                        generation.generateInChunk(chunk);
+                        nodeManager.markChunkProcessed(world, chunk.getX(), chunk.getZ());
                         chunks++;
                     }
                 }
@@ -78,73 +83,78 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§aПерегенерировано загруженных чанков: §f" + chunks + " §7(миры: " + names(targets) + ")");
                 return true;
             }
+
             case "restartgen": {
                 List<World> targets = resolveWorlds(args, 1);
                 if (targets.isEmpty()) {
-                    sender.sendMessage("§cМир не найден или не включён в enabled-worlds.");
+                    sender.sendMessage("§cМир не найден или не разрешён в настройках плагина.");
                     return true;
                 }
-                for (World w : targets) nodeManager.clearProcessedFlags(w);
+                for (World world : targets) nodeManager.clearProcessedFlags(world);
 
                 int chunks = 0;
-                for (World w : targets) {
-                    for (Chunk c : w.getLoadedChunks()) {
-                        nodeManager.removeRespawnsInChunk(c);
-                        nodeManager.removeNodesInChunk(c);
-                        generation.generateInChunk(c);
-                        nodeManager.markChunkProcessed(w, c.getX(), c.getZ());
+                for (World world : targets) {
+                    for (Chunk chunk : world.getLoadedChunks()) {
+                        nodeManager.removeRespawnsInChunk(chunk);
+                        nodeManager.removeNodesInChunk(chunk);
+                        generation.generateInChunk(chunk);
+                        nodeManager.markChunkProcessed(world, chunk.getX(), chunk.getZ());
                         chunks++;
                     }
                 }
                 nodeManager.save();
-                sender.sendMessage("§aРестарт генерации выполнен. Чанков: §f" + chunks + " §7(миры: " + names(targets) + ")");
+                sender.sendMessage("§aПерезапуск генерации выполнен. Обработано чанков: §f" + chunks + " §7(миры: " + names(targets) + ")");
                 return true;
             }
+
             case "applyvisuals": {
-                boolean enabled = plugin.getConfig().getBoolean("visual.server-solid.enabled", false);
+                boolean enabled = plugin.getConfig().getBoolean("визуал.серверный-блок.включено", false);
                 boolean force = args.length >= 3 && args[2].equalsIgnoreCase("force");
                 if (!enabled && !force) {
-                    sender.sendMessage("§evisual.server-solid.enabled: false §7— включи в config.yml и /" + label + " reload, или добавь §fforce§7: /" + label + " applyvisuals all force");
+                    sender.sendMessage("§eСерверный внешний вид отключён в конфигурации. Включите «визуал.серверный-блок.включено» и выполните /" + label + " reload, либо используйте force.");
                     return true;
                 }
+
                 List<World> targets = resolveWorlds(args, 1);
                 if (targets.isEmpty()) {
-                    sender.sendMessage("§cМир не найден или не включён в enabled-worlds.");
+                    sender.sendMessage("§cМир не найден или не разрешён в настройках плагина.");
                     return true;
                 }
+
                 int total = 0;
-                for (World w : targets) {
-                    total += nodeManager.applyServerVisualsInWorld(w, true); // только загруженные чанки
-                }
-                sender.sendMessage("§aПрименён «цельный» вид к узлам: §f" + total + " §7(миры: " + names(targets) + ")");
+                for (World world : targets) total += nodeManager.applyServerVisualsInWorld(world, true);
+                sender.sendMessage("§aСерверный внешний вид применён к узлам: §f" + total + " §7(миры: " + names(targets) + ")");
                 return true;
             }
+
             default:
-                sender.sendMessage("§cНеизвестная подкоманда. /" + label + " help");
+                sender.sendMessage("§cНеизвестная подкоманда. Используйте /" + label + " help");
                 return true;
         }
     }
 
     private List<World> resolveWorlds(String[] args, int idxFrom) {
-        List<String> enabled = plugin.getConfig().getStringList("enabled-worlds");
+        List<String> enabled = plugin.getConfig().getStringList("разрешённые-мирами");
         List<World> targets = new ArrayList<>();
-        String name = (args.length > idxFrom) ? args[idxFrom] : "all";
+        String name = args.length > idxFrom ? args[idxFrom] : "all";
+
         if (name.equalsIgnoreCase("all")) {
-            for (String wname : enabled) {
-                World w = plugin.getServer().getWorld(wname);
-                if (w != null) targets.add(w);
+            for (String worldName : enabled) {
+                World world = plugin.getServer().getWorld(worldName);
+                if (world != null) targets.add(world);
             }
             return targets;
         }
-        World w = plugin.getServer().getWorld(name);
-        if (w != null && enabled.contains(w.getName())) targets.add(w);
+
+        World world = plugin.getServer().getWorld(name);
+        if (world != null && enabled.contains(world.getName())) targets.add(world);
         return targets;
     }
 
     private String names(List<World> worlds) {
-        List<String> n = new ArrayList<>();
-        for (World w : worlds) n.add(w.getName());
-        return String.join(", ", n);
+        List<String> names = new ArrayList<>();
+        for (World world : worlds) names.add(world.getName());
+        return String.join(", ", names);
     }
 
     @Override
@@ -159,15 +169,13 @@ public class BedrockOresCommand implements CommandExecutor, TabCompleter {
                 || args[0].equalsIgnoreCase("regenloaded")
                 || args[0].equalsIgnoreCase("restartgen")
                 || args[0].equalsIgnoreCase("applyvisuals"))) {
-            List<String> worlds = new ArrayList<>(plugin.getConfig().getStringList("enabled-worlds"));
+            List<String> worlds = new ArrayList<>(plugin.getConfig().getStringList("разрешённые-мирами"));
             worlds.add("all");
             StringUtil.copyPartialMatches(args[1], worlds, out);
             return out;
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("applyvisuals")) {
-            List<String> opts = List.of("force");
-            StringUtil.copyPartialMatches(args[2], opts, out);
-            return out;
+            StringUtil.copyPartialMatches(args[2], List.of("force"), out);
         }
         return out;
     }

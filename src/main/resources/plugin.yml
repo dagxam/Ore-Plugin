@@ -4,14 +4,17 @@ version: ${project.version}
 api-version: '1.21'
 load: POSTWORLD
 prefix: BedrockOres
-authors: [ "your-name" ]
-description: Unbreakable ore nodes near bedrock that drop on hit and turn into bedrock after N hits.
+authors: [ "dagxam" ]
+description: Русские рудные узлы с добычей ударами, ограничением прочности и автоматическим возрождением.
 commands:
   bedrockores:
-    description: Bedrock Ores admin command
+    description: Административная команда управления рудными узлами
+    usage: /bedrockores <help|reload|clearflags|regenloaded|restartgen>
     permission: bedrockores.admin
 permissions:
   bedrockores.admin:
+    description: Разрешает управление BedrockOres и выполнение административных команд
     default: op
   bedrockores.use:
+    description: Разрешает добывать рудные узлы
     default: true
