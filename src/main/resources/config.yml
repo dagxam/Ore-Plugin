@@ -13,39 +13,27 @@ visual:
       DEEPSLATE_DIAMOND_ORE: DIAMOND_BLOCK
       DEEPSLATE_EMERALD_ORE: EMERALD_BLOCK
       DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK
-      DEEPSLATE_LAPIS_ORE:   LAPIS_BLOCK
-      DEEPSLATE_GOLD_ORE:    GOLD_BLOCK
-      DEEPSLATE_IRON_ORE:    IRON_BLOCK
-      DEEPSLATE_COAL_ORE:    COAL_BLOCK
-
-      # Виртуальная "руда": NETHERITE_SCRAP
-      # Физически узел ставит ANCIENT_DEBRIS, но дроп будет NETHERITE_SCRAP
+      DEEPSLATE_LAPIS_ORE: LAPIS_BLOCK
+      DEEPSLATE_GOLD_ORE: GOLD_BLOCK
+      DEEPSLATE_IRON_ORE: IRON_BLOCK
+      DEEPSLATE_COAL_ORE: COAL_BLOCK
       NETHERITE_SCRAP: ANCIENT_DEBRIS
 
 generation:
-  # Если задать любой из них — генерация будет строго в этом диапазоне
-  # (эти ключи реально поддерживаются кодом через isInt)
-  # y-min: -64
-  # y-max: -56
-
-  # Если y-min/y-max не заданы — берётся полоса от нижней границы мира
   default-bedrock-band: 8
-
   cluster:
     size-min: 3
     size-max: 6
     min-spacing: 4
-
+    vertical-spacing: 2
   chance-per-block: 0.008
   density-multiplier: 1.0
   target-per-chunk: 12
   max-per-chunk: 24
   fill-attempts-per-node: 25
-  max-attempts-per-chunk: 1800
-
+  max-attempts-per-chunk: 900
   overworld:
     allow-stone-variants: true
-
   queue:
     enabled: true
     chunks-per-tick: 2
@@ -53,6 +41,11 @@ generation:
     fill-attempts-per-tick: 180
 
 fortune-enabled: true
+fortune:
+  mode: vanilla
+
+drops:
+  respect-silk-touch: false
 
 ore-weights:
   DEEPSLATE_REDSTONE_ORE: 8
@@ -66,14 +59,12 @@ ore-weights:
 
 ore-weights-nether:
   NETHERITE_SCRAP: 2
-  DEEPSLATE_GOLD_ORE: 1
 
 respawn:
   enabled: true
   delay-seconds: 3600
 
 persistence:
-  # Плагин реально использует это значение для периодического сохранения nodes.yml
   save-interval-seconds: 120
   save-on-respawn-schedule: false
 
