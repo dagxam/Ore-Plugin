@@ -1,51 +1,37 @@
-enabled-worlds:
-  - world
-  - world_nether
+# Пустой список = все миры сервера, включая обычный мир, Незер и Энд.
+enabled-worlds: []
 
+# Каждый специальный блок разрушается с первого успешного удара.
 node:
-  hits-min: 9
-  hits-max: 20
+  hits-min: 1
+  hits-max: 1
+
+# Награда за один специальный блок: случайно от 5 до 20 единиц соответствующей руды.
+drops:
+  min-per-node: 5
+  max-per-node: 20
+  respect-silk-touch: false
 
 visual:
   server-solid:
     enabled: false
-    map:
-      DEEPSLATE_DIAMOND_ORE: DIAMOND_BLOCK
-      DEEPSLATE_EMERALD_ORE: EMERALD_BLOCK
-      DEEPSLATE_REDSTONE_ORE: REDSTONE_BLOCK
-      DEEPSLATE_LAPIS_ORE: LAPIS_BLOCK
-      DEEPSLATE_GOLD_ORE: GOLD_BLOCK
-      DEEPSLATE_IRON_ORE: IRON_BLOCK
-      DEEPSLATE_COAL_ORE: COAL_BLOCK
-      NETHERITE_SCRAP: ANCIENT_DEBRIS
+    map: {}
 
 generation:
-  default-bedrock-band: 8
-  cluster:
-    size-min: 3
-    size-max: 6
-    min-spacing: 4
-    vertical-spacing: 2
-  chance-per-block: 0.008
-  density-multiplier: 1.0
-  target-per-chunk: 12
-  max-per-chunk: 24
-  fill-attempts-per-node: 25
-  max-attempts-per-chunk: 900
+  # Генерация идёт по всей естественной высоте мира, а не только у бедрока.
+  y-min: null
+  y-max: null
+  nodes-per-chunk: 2
+  max-attempts-per-chunk: 96
+  min-spacing: 8
+  vertical-spacing: 4
+  replace-standard-ores: false
   overworld:
     allow-stone-variants: true
   queue:
     enabled: true
     chunks-per-tick: 2
-    positions-per-tick: 300
-    fill-attempts-per-tick: 180
-
-fortune-enabled: true
-fortune:
-  mode: vanilla
-
-drops:
-  respect-silk-touch: false
+    positions-per-tick: 128
 
 ore-weights:
   DEEPSLATE_REDSTONE_ORE: 8
@@ -58,7 +44,11 @@ ore-weights:
   DEEPSLATE_EMERALD_ORE: 1
 
 ore-weights-nether:
-  NETHERITE_SCRAP: 2
+  ANCIENT_DEBRIS: 2
+
+ore-weights-end:
+  DEEPSLATE_DIAMOND_ORE: 2
+  DEEPSLATE_EMERALD_ORE: 1
 
 respawn:
   enabled: true
@@ -71,6 +61,3 @@ persistence:
 performance:
   direct-item-to-inventory: true
   xp-mode: direct
-  hold-hit-interval-ticks: 5
-  hold-timeout-ms: 400
-  max-hold-hits-per-tick: 60
