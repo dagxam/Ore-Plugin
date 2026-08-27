@@ -1,14 +1,14 @@
-name: BedrockOres
+name: Ore Plugin
 main: dev.dagxam.bedrockores.BedrockOresPlugin
 version: ${project.version}
 api-version: '1.21'
 load: POSTWORLD
-prefix: BedrockOres
+prefix: Ore Plugin
 authors: [ "your-name" ]
-description: Unbreakable ore nodes near bedrock that drop on hit and turn into bedrock after N hits.
+description: Adds vanilla-compatible ore generation and rare rich ore veins with configurable rewards.
 commands:
   bedrockores:
-    description: Bedrock Ores admin command
+    description: Ore Plugin admin command
     permission: bedrockores.admin
 permissions:
   bedrockores.admin:
