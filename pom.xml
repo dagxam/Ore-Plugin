@@ -5,10 +5,10 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>dev.dagxam</groupId>
-  <artifactId>bedrock-ores</artifactId>
+  <artifactId>oresplugin</artifactId>
   <version>1.0.0</version>
-  <name>BedrockOres</name>
-  <description>Bedrock-adjacent ores plugin for Paper 1.21+</description>
+  <name>Ore Plugin</name>
+  <description>Vanilla-compatible ore generation and rich ore veins plugin for Paper 1.21+</description>
   <packaging>jar</packaging>
 
   <properties>
@@ -39,16 +39,12 @@
       <resource>
         <directory>src/main/resources</directory>
         <filtering>true</filtering>
-        <includes>
-          <include>plugin.yml</include>
-        </includes>
+        <includes><include>plugin.yml</include></includes>
       </resource>
       <resource>
         <directory>src/main/resources</directory>
         <filtering>false</filtering>
-        <excludes>
-          <exclude>plugin.yml</exclude>
-        </excludes>
+        <excludes><exclude>plugin.yml</exclude></excludes>
       </resource>
     </resources>
 
@@ -62,27 +58,19 @@
             <id>enforce-java</id>
             <goals><goal>enforce</goal></goals>
             <configuration>
-              <rules>
-                <requireJavaVersion>
-                  <version>[21,22)</version>
-                </requireJavaVersion>
-              </rules>
+              <rules><requireJavaVersion><version>[21,22)</version></requireJavaVersion></rules>
               <fail>true</fail>
             </configuration>
           </execution>
         </executions>
       </plugin>
-
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.11.0</version>
         <configuration>
           <release>${maven.compiler.release}</release>
-          <compilerArgs>
-            <arg>-Xlint:deprecation</arg>
-            <arg>-Xlint:unchecked</arg>
-          </compilerArgs>
+          <compilerArgs><arg>-Xlint:deprecation</arg><arg>-Xlint:unchecked</arg></compilerArgs>
         </configuration>
       </plugin>
     </plugins>
