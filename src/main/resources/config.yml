@@ -1,54 +1,135 @@
-# Пустой список = все миры сервера, включая обычный мир, Незер и Энд.
+# Пустой список = все миры сервера.
 enabled-worlds: []
 
-# Каждый специальный блок разрушается с первого успешного удара.
 node:
   hits-min: 1
   hits-max: 1
 
-# Награда за один специальный блок: случайно от 5 до 20 единиц соответствующей руды.
 drops:
   min-per-node: 5
   max-per-node: 20
   respect-silk-touch: false
 
-visual:
-  server-solid:
-    enabled: false
-    map: {}
+# Обычные руды, которыми управляет сам плагин.
+# enabled: false полностью отключает дополнительную генерацию обычных руд.
+# Это НЕ удаляет ванильную генерацию Minecraft: для её полного отключения нужен
+# отдельный datapack/custom world generator. При enabled: true плагин добавляет
+# свои обычные руды поверх стандартной генерации.
+normal-ores:
+  enabled: true
+  types:
+    COAL_ORE:
+      enabled: true
+      veins-per-chunk: 8
+      vein-size-min: 4
+      vein-size-max: 12
+      min-y: 0
+      max-y: 192
+    IRON_ORE:
+      enabled: true
+      veins-per-chunk: 7
+      vein-size-min: 4
+      vein-size-max: 10
+      min-y: -64
+      max-y: 192
+    COPPER_ORE:
+      enabled: true
+      veins-per-chunk: 5
+      vein-size-min: 4
+      vein-size-max: 10
+      min-y: -16
+      max-y: 112
+    GOLD_ORE:
+      enabled: true
+      veins-per-chunk: 4
+      vein-size-min: 3
+      vein-size-max: 8
+      min-y: -64
+      max-y: 64
+    REDSTONE_ORE:
+      enabled: true
+      veins-per-chunk: 6
+      vein-size-min: 4
+      vein-size-max: 10
+      min-y: -64
+      max-y: 16
+    LAPIS_ORE:
+      enabled: true
+      veins-per-chunk: 3
+      vein-size-min: 3
+      vein-size-max: 8
+      min-y: -64
+      max-y: 64
+    DIAMOND_ORE:
+      enabled: true
+      veins-per-chunk: 2
+      vein-size-min: 2
+      vein-size-max: 6
+      min-y: -64
+      max-y: 16
+    EMERALD_ORE:
+      enabled: true
+      veins-per-chunk: 1
+      vein-size-min: 1
+      vein-size-max: 3
+      min-y: -16
+      max-y: 192
+    NETHER_GOLD_ORE:
+      enabled: true
+      veins-per-chunk: 6
+      vein-size-min: 4
+      vein-size-max: 10
+      min-y: 0
+      max-y: 128
+    NETHER_QUARTZ_ORE:
+      enabled: true
+      veins-per-chunk: 8
+      vein-size-min: 4
+      vein-size-max: 12
+      min-y: 0
+      max-y: 128
+    ANCIENT_DEBRIS:
+      enabled: true
+      veins-per-chunk: 1
+      vein-size-min: 1
+      vein-size-max: 3
+      min-y: 8
+      max-y: 24
 
+# Редкие богатые жилы плагина. Каждый блок даёт 5-20 ресурсов и исчезает.
 generation:
-  # Генерация идёт по всей естественной высоте мира, а не только у бедрока.
   y-min: null
   y-max: null
-  nodes-per-chunk: 2
+  veins-per-chunk: 2
+  vein-size-min: 3
+  vein-size-max: 5
   max-attempts-per-chunk: 96
   min-spacing: 8
   vertical-spacing: 4
-  replace-standard-ores: false
-  overworld:
-    allow-stone-variants: true
   queue:
     enabled: true
     chunks-per-tick: 2
-    positions-per-tick: 128
+    positions-per-tick: 256
 
 ore-weights:
-  DEEPSLATE_REDSTONE_ORE: 8
-  DEEPSLATE_IRON_ORE: 6
-  DEEPSLATE_GOLD_ORE: 3
-  DEEPSLATE_COPPER_ORE: 4
-  DEEPSLATE_COAL_ORE: 4
-  DEEPSLATE_LAPIS_ORE: 3
-  DEEPSLATE_DIAMOND_ORE: 1
-  DEEPSLATE_EMERALD_ORE: 1
+  REDSTONE_ORE: 8
+  IRON_ORE: 6
+  GOLD_ORE: 3
+  COPPER_ORE: 4
+  COAL_ORE: 4
+  LAPIS_ORE: 3
+  DIAMOND_ORE: 1
+  EMERALD_ORE: 1
 
 ore-weights-nether:
   ANCIENT_DEBRIS: 2
 
-ore-weights-end:
-  DEEPSLATE_DIAMOND_ORE: 2
-  DEEPSLATE_EMERALD_ORE: 1
+ore-weights-end: {}
+
+visual:
+  server-solid:
+    enabled: false
+    map: {}
 
 respawn:
   enabled: true
