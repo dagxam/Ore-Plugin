@@ -1,5 +1,5 @@
 name: Ore Plugin
-main: dev.dagxam.bedrockores.BedrockOresPlugin
+main: dev.dagxam.bedrockores.OrePlugin
 version: ${project.version}
 api-version: '1.21'
 load: POSTWORLD
