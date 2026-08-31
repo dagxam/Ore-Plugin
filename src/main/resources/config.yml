@@ -1,137 +1,43 @@
+# Ore Plugin — только плотные (богатые) руды.
+# Стандартные руды Minecraft и/или другого плагина НЕ изменяются.
 # Пустой список = все миры сервера.
 enabled-worlds: []
 
 node:
+  # Внутреннее количество ударов до разрушения плотного блока.
   hits-min: 1
   hits-max: 1
 
 drops:
+  # За каждый добытый плотный рудный блок игрок получает 5–20 единиц руды.
   min-per-node: 5
   max-per-node: 20
   respect-silk-touch: false
 
-# Генерация обычных руд плагином.
-# enabled: false — обычные руды полностью остаются на стандартной генерации Minecraft.
-# enabled: true — плагин использует профили, максимально приближенные к современной
-# ванильной генерации 1.18+ по высоте, редкости и размеру жил.
-normal-ores:
-  enabled: true
-  profile: VANILLA_1_21_STYLE
-  types:
-    COAL_ORE:
-      enabled: true
-      veins-per-chunk: 8
-      vein-size-min: 4
-      vein-size-max: 17
-      min-y: 0
-      max-y: 192
-      distribution: TRIANGLE_PEAK
-      peak-y: 96
-    IRON_ORE:
-      enabled: true
-      veins-per-chunk: 9
-      vein-size-min: 4
-      vein-size-max: 13
-      min-y: -64
-      max-y: 320
-      distribution: TRIANGLE_PEAK
-      peak-y: 232
-    COPPER_ORE:
-      enabled: true
-      veins-per-chunk: 7
-      vein-size-min: 4
-      vein-size-max: 10
-      min-y: -16
-      max-y: 112
-      distribution: TRIANGLE_PEAK
-      peak-y: 48
-    GOLD_ORE:
-      enabled: true
-      veins-per-chunk: 4
-      vein-size-min: 3
-      vein-size-max: 9
-      min-y: -64
-      max-y: 32
-      distribution: TRIANGLE_PEAK
-      peak-y: -16
-    REDSTONE_ORE:
-      enabled: true
-      veins-per-chunk: 6
-      vein-size-min: 4
-      vein-size-max: 10
-      min-y: -64
-      max-y: 16
-      distribution: TRIANGLE_PEAK
-      peak-y: -58
-    LAPIS_ORE:
-      enabled: true
-      veins-per-chunk: 3
-      vein-size-min: 2
-      vein-size-max: 8
-      min-y: -64
-      max-y: 64
-      distribution: TRIANGLE_PEAK
-      peak-y: 0
-    DIAMOND_ORE:
-      enabled: true
-      veins-per-chunk: 2
-      vein-size-min: 1
-      vein-size-max: 8
-      min-y: -64
-      max-y: 16
-      distribution: TRIANGLE_PEAK
-      peak-y: -59
-    EMERALD_ORE:
-      enabled: true
-      veins-per-chunk: 1
-      vein-size-min: 1
-      vein-size-max: 3
-      min-y: -16
-      max-y: 320
-      distribution: TRIANGLE_PEAK
-      peak-y: 180
-      mountains-only: true
-    NETHER_GOLD_ORE:
-      enabled: true
-      veins-per-chunk: 10
-      vein-size-min: 4
-      vein-size-max: 16
-      min-y: 10
-      max-y: 117
-      distribution: UNIFORM
-    NETHER_QUARTZ_ORE:
-      enabled: true
-      veins-per-chunk: 16
-      vein-size-min: 4
-      vein-size-max: 16
-      min-y: 10
-      max-y: 117
-      distribution: UNIFORM
-    ANCIENT_DEBRIS:
-      enabled: true
-      veins-per-chunk: 2
-      vein-size-min: 1
-      vein-size-max: 3
-      min-y: 8
-      max-y: 24
-      distribution: TRIANGLE_PEAK
-      peak-y: 15
-
-# Редкие богатые жилы плагина. Каждый блок даёт 5–20 ресурсов и исчезает.
+# Плотные рудные жилы.
+# Каждая жила состоит из 3–5 связанных блоков одной руды.
 generation:
-  y-min: null
-  y-max: null
+  enabled: true
   veins-per-chunk: 2
   vein-size-min: 3
   vein-size-max: 5
-  max-attempts-per-chunk: 96
+
+  # Плотные руды могут появляться на любой высоте мира.
+  y-min: null
+  y-max: null
+
+  # Минимальное горизонтальное расстояние между центрами жил.
   min-spacing: 8
   vertical-spacing: 4
+  max-attempts-per-chunk: 96
+
+  # Плавная очередь генерации без большого burst по TPS.
   queue:
     enabled: true
     chunks-per-tick: 2
-    positions-per-tick: 256
 
+# Вероятности выбора типа ПЛОТНОЙ руды.
+# Удали/поставь 0 — руда не будет генерироваться.
 ore-weights:
   REDSTONE_ORE: 8
   IRON_ORE: 6
@@ -142,20 +48,31 @@ ore-weights:
   DIAMOND_ORE: 1
   EMERALD_ORE: 1
 
+# Плотные руды Нижнего мира.
 ore-weights-nether:
+  NETHER_GOLD_ORE: 6
+  NETHER_QUARTZ_ORE: 8
   ANCIENT_DEBRIS: 2
+
+# В End по умолчанию плотные руды не генерируются.
 ore-weights-end: {}
 
 visual:
   server-solid:
     enabled: false
     map: {}
+
 respawn:
   enabled: true
   delay-seconds: 3600
+
 persistence:
   save-interval-seconds: 120
   save-on-respawn-schedule: false
+
 performance:
   direct-item-to-inventory: true
   xp-mode: direct
+  hold-hit-interval-ticks: 5
+  hold-timeout-ms: 400
+  max-hold-hits-per-tick: 60
