@@ -1,43 +1,34 @@
 # Ore Plugin — только плотные (богатые) руды.
 # Стандартные руды Minecraft и/или другого плагина НЕ изменяются.
-# Пустой список = все миры сервера.
 enabled-worlds: []
 
 node:
-  # Внутреннее количество ударов до разрушения плотного блока.
   hits-min: 1
   hits-max: 1
 
 drops:
-  # За каждый добытый плотный рудный блок игрок получает 5–20 единиц руды.
+  # Общий запасной вариант. Каждая руда ниже может переопределить его.
   min-per-node: 5
   max-per-node: 20
   respect-silk-touch: false
 
-# Плотные рудные жилы.
-# Каждая жила состоит из 3–5 связанных блоков одной руды.
 generation:
   enabled: true
+  # Запасное значение. Для каждой руды можно задать своё количество блоков в жиле.
   veins-per-chunk: 2
   vein-size-min: 3
   vein-size-max: 5
-
-  # Плотные руды могут появляться на любой высоте мира.
+  # Пусто/не задано = вся высота мира.
   y-min: null
   y-max: null
-
-  # Минимальное горизонтальное расстояние между центрами жил.
   min-spacing: 8
   vertical-spacing: 4
   max-attempts-per-chunk: 96
-
-  # Плавная очередь генерации без большого burst по TPS.
   queue:
     enabled: true
     chunks-per-tick: 2
 
-# Вероятности выбора типа ПЛОТНОЙ руды.
-# Удали/поставь 0 — руда не будет генерироваться.
+# Вес выбора богатой руды. Чем выше weight, тем чаще жила этого типа.
 ore-weights:
   REDSTONE_ORE: 8
   IRON_ORE: 6
@@ -48,14 +39,75 @@ ore-weights:
   DIAMOND_ORE: 1
   EMERALD_ORE: 1
 
-# Плотные руды Нижнего мира.
 ore-weights-nether:
   NETHER_GOLD_ORE: 6
   NETHER_QUARTZ_ORE: 8
   ANCIENT_DEBRIS: 2
 
-# В End по умолчанию плотные руды не генерируются.
 ore-weights-end: {}
+
+# ============================================================
+# ИНДИВИДУАЛЬНЫЕ НАСТРОЙКИ КАЖДОЙ БОГАТОЙ РУДЫ
+# drops-min / drops-max = сколько ресурса выпадает с ОДНОГО блока.
+# vein-size-min / vein-size-max = сколько БЛОКОВ этой руды будет рядом в жиле.
+# Если параметр не задан — используется общий параметр выше.
+# ============================================================
+rich-ores:
+  COAL_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  IRON_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  COPPER_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  GOLD_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  REDSTONE_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  LAPIS_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  DIAMOND_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  EMERALD_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  NETHER_GOLD_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  NETHER_QUARTZ_ORE:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
+  ANCIENT_DEBRIS:
+    drops-min: 5
+    drops-max: 20
+    vein-size-min: 3
+    vein-size-max: 5
 
 visual:
   server-solid:
