@@ -3,32 +3,37 @@
 enabled-worlds: []
 
 node:
-  hits-min: 1
-  hits-max: 1
+  # Количество ударов по одному богатому рудному блоку.
+  hits-min: 10
+  hits-max: 20
 
 drops:
-  # Общий запасной вариант. Каждая руда ниже может переопределить его.
-  min-per-node: 5
-  max-per-node: 20
+  # Один удар = одна руда.
+  min-per-node: 1
+  max-per-node: 1
   respect-silk-touch: false
 
 generation:
   enabled: true
-  # Запасное значение. Для каждой руды можно задать своё количество блоков в жиле.
+  # Сколько богатых жил пытаемся создать в каждом чанке.
   veins-per-chunk: 2
-  vein-size-min: 3
-  vein-size-max: 5
-  # Пусто/не задано = вся высота мира.
+  # Запасные значения. Для каждой руды можно задать свои.
+  vein-size-min: 5
+  vein-size-max: 10
+  # Богатые руды генерируются только в первых 5 блоках над бедроком.
+  bedrock-layer-height: 5
   y-min: null
   y-max: null
   min-spacing: 8
   vertical-spacing: 4
-  max-attempts-per-chunk: 96
+  max-attempts-per-chunk: 256
   queue:
     enabled: true
     chunks-per-tick: 2
+  # После полного истощения жилы при следующей загрузке чанка создаётся новая жила.
+  # Истощённый блок остаётся BEDROCK.
+  depleted-block: BEDROCK
 
-# Вес выбора богатой руды. Чем выше weight, тем чаще жила этого типа.
 ore-weights:
   REDSTONE_ORE: 8
   IRON_ORE: 6
@@ -48,74 +53,97 @@ ore-weights-end: {}
 
 # ============================================================
 # ИНДИВИДУАЛЬНЫЕ НАСТРОЙКИ КАЖДОЙ БОГАТОЙ РУДЫ
-# drops-min / drops-max = сколько ресурса выпадает с ОДНОГО блока.
-# vein-size-min / vein-size-max = сколько БЛОКОВ этой руды будет рядом в жиле.
-# Если параметр не задан — используется общий параметр выше.
+# drops-min / drops-max = сколько ресурса выпадает за ОДИН УДАР.
+# hits-min / hits-max = сколько ударов выдерживает ОДИН блок.
+# vein-size-min / vein-size-max = сколько БЛОКОВ руды в одной жиле.
 # ============================================================
 rich-ores:
   COAL_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   IRON_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   COPPER_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   GOLD_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   REDSTONE_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   LAPIS_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   DIAMOND_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   EMERALD_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   NETHER_GOLD_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   NETHER_QUARTZ_ORE:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
   ANCIENT_DEBRIS:
-    drops-min: 5
-    drops-max: 20
-    vein-size-min: 3
-    vein-size-max: 5
+    drops-min: 1
+    drops-max: 1
+    hits-min: 10
+    hits-max: 20
+    vein-size-min: 5
+    vein-size-max: 10
 
 visual:
   server-solid:
     enabled: false
     map: {}
 
+# Автоматический респаун выключен: после истощения блок становится BEDROCK.
 respawn:
-  enabled: true
+  enabled: false
   delay-seconds: 3600
 
 persistence:
