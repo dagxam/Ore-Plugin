@@ -146,18 +146,7 @@ public class GenerationListener implements Listener {
         };
         if (weights.isEmpty()) return;
 
-        /*
-         * The world's minimum Y is the bottom of the world, not the top of the
-         * generated bedrock floor. In modern Overworld/Nether worlds the floor
-         * occupies roughly the first five Y levels, so the rich-ore layer must
-         * start after that floor. This also guarantees we never target bedrock.
-         */
-        int worldMinY = world.getMinHeight();
-        int bedrockFloorHeight = Math.max(1, plugin.getConfig().getInt("generation.bedrock-floor-height", 5));
         int richLayerHeight = Math.max(1, plugin.getConfig().getInt("generation.bedrock-layer-height", 5));
-        int minY = worldMinY + bedrockFloorHeight;
-        int maxY = minY + richLayerHeight - 1;
-
         int veins = Math.max(0, plugin.getConfig().getInt("generation.veins-per-chunk", 2));
         int spacing = Math.max(1, plugin.getConfig().getInt("generation.min-spacing", 8));
         int vertical = Math.max(0, plugin.getConfig().getInt("generation.vertical-spacing", 4));
@@ -166,15 +155,39 @@ public class GenerationListener implements Listener {
         int placed = 0;
         for (int attempt = 0; attempt < attempts && placed < veins; attempt++) {
             int x = (chunk.getX() << 4) + random.nextInt(16);
-            int y = minY + random.nextInt(Math.max(1, maxY - minY + 1));
             int z = (chunk.getZ() << 4) + random.nextInt(16);
+            int minY = findBedrockTop(world, x, z) + 1;
+            int maxY = minY + richLayerHeight - 1;
 
+            // Never place outside the world's actual vertical build range.
+            minY = Math.max(minY, world.getMinHeight() + 1);
+            maxY = Math.min(maxY, world.getMaxHeight() - 1);
+            if (minY > maxY) continue;
+
+            int y = minY + random.nextInt(maxY - minY + 1);
             if (!isValidHost(world.getBlockAt(x, y, z).getType())) continue;
             if (!nodeManager.isAreaFree(world.getUID(), x, y, z, spacing, vertical)) continue;
 
             Material ore = roll(weights);
             if (ore != null && placeRichVein(chunk, x, y, z, ore, minY, maxY)) placed++;
         }
+    }
+
+    /** Returns the highest bedrock block in the bottom part of a column. */
+    private int findBedrockTop(World world, int x, int z) {
+        int minY = world.getMinHeight();
+        int scanMax = Math.min(world.getMaxHeight() - 1, minY + 16);
+        int highestBedrock = minY - 1;
+
+        for (int y = minY; y <= scanMax; y++) {
+            if (world.getBlockAt(x, y, z).getType() == Material.BEDROCK) {
+                highestBedrock = y;
+            }
+        }
+
+        // Worlds without a bedrock floor (or unusual custom generators) fall
+        // back to a small offset rather than ever selecting the minimum block.
+        return highestBedrock >= minY ? highestBedrock : minY + 4;
     }
 
     private boolean placeRichVein(Chunk chunk, int x, int y, int z, Material ore, int minY, int maxY) {
